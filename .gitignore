@@ -1,0 +1,15 @@
+# Android / Gradle
+*.iml
+.gradle/
+.kotlin/
+build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IDE
+.idea/
+
+# Claude
+.claude/settings.local.json
