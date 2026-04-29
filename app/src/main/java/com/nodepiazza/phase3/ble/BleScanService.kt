@@ -110,7 +110,7 @@ class BleScanService : Service() {
             context.startForegroundService(intent)
         }
 
-        fun notifyMatch(context: Context, address: String, label: String) {
+        fun notifyMatch(context: Context, address: String, label: String, peerPrompt: String?) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED
@@ -125,9 +125,14 @@ class BleScanService : Service() {
                 openIntent,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
+            val body = if (!peerPrompt.isNullOrBlank()) {
+                "$label: \"$peerPrompt\" — tap to chat"
+            } else {
+                "$label is looking for similar things — tap to chat"
+            }
             val notification = NotificationCompat.Builder(context, MATCH_CHANNEL_ID)
                 .setContentTitle("New match")
-                .setContentText("$label is looking for similar things — tap to chat")
+                .setContentText(body)
                 .setSmallIcon(android.R.drawable.stat_notify_chat)
                 .setContentIntent(pi)
                 .setAutoCancel(true)

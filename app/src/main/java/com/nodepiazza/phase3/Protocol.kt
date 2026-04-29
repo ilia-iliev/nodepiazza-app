@@ -9,10 +9,13 @@ object Protocol {
     val SERVICE_UUID: UUID = UUID.fromString("9d3c4e10-8e2d-4fa0-a1b2-000000000001")
     val EMBEDDING_CHAR_UUID: UUID = UUID.fromString("9d3c4e10-8e2d-4fa0-a1b2-000000000002")
     val CHAT_CHAR_UUID: UUID = UUID.fromString("9d3c4e10-8e2d-4fa0-a1b2-000000000003")
+    val PROMPTS_CHAR_UUID: UUID = UUID.fromString("9d3c4e10-8e2d-4fa0-a1b2-000000000004")
+    val CONTROL_CHAR_UUID: UUID = UUID.fromString("9d3c4e10-8e2d-4fa0-a1b2-000000000005")
 
     const val EMBEDDING_DIMS = 128
     const val MATCH_THRESHOLD = 0.55f
     const val MAX_PROMPTS_PER_DEVICE = 8
+    const val MAX_PROMPT_BYTES = 256
     const val REQUESTED_MTU = 247
 }
 
@@ -88,6 +91,53 @@ object EmbeddingPayload {
             bytes.copyOfRange(3 + i * dims, 3 + (i + 1) * dims)
         }
     }
+}
+
+/**
+ * Pack a list of prompt texts into a single characteristic payload, served via offset-based reads.
+ * Format: [version:1][count:1][entry_0 ... entry_n], each entry is `[len:2 BE][utf8 bytes...]`.
+ * Each prompt is truncated to MAX_PROMPT_BYTES; list capped at MAX_PROMPTS_PER_DEVICE.
+ */
+object PromptsPayload {
+    private const val VERSION: Byte = 1
+
+    fun encode(prompts: List<String>): ByteArray {
+        val capped = prompts.take(Protocol.MAX_PROMPTS_PER_DEVICE).map { p ->
+            val bytes = p.toByteArray(Charsets.UTF_8)
+            if (bytes.size <= Protocol.MAX_PROMPT_BYTES) bytes
+            else bytes.copyOfRange(0, Protocol.MAX_PROMPT_BYTES)
+        }
+        val total = 2 + capped.sumOf { 2 + it.size }
+        val buf = ByteBuffer.allocate(total)
+        buf.put(VERSION)
+        buf.put(capped.size.toByte())
+        for (e in capped) {
+            buf.putShort(e.size.toShort())
+            buf.put(e)
+        }
+        return buf.array()
+    }
+
+    fun decode(bytes: ByteArray): List<String> {
+        if (bytes.size < 2 || bytes[0] != VERSION) return emptyList()
+        val count = bytes[1].toInt() and 0xFF
+        val out = ArrayList<String>(count)
+        var pos = 2
+        repeat(count) {
+            if (pos + 2 > bytes.size) return out
+            val len = ((bytes[pos].toInt() and 0xFF) shl 8) or (bytes[pos + 1].toInt() and 0xFF)
+            pos += 2
+            if (len < 0 || pos + len > bytes.size) return out
+            out += bytes.copyOfRange(pos, pos + len).toString(Charsets.UTF_8)
+            pos += len
+        }
+        return out
+    }
+}
+
+/** One-byte control signals written to CONTROL_CHAR_UUID. */
+object ControlSignal {
+    const val REJECT: Byte = 0x01
 }
 
 /**

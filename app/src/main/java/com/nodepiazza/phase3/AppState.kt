@@ -64,6 +64,8 @@ class AppState private constructor(context: Context) {
 
     fun myEmbeddings(): List<ByteArray> = _prompts.value.map { embed(it.text).toInt8Bytes() }
 
+    fun myPromptTexts(): List<String> = _prompts.value.map { it.text }
+
     fun upsertPeer(peer: Peer) {
         _peers.update { it + (peer.address to peer) }
     }

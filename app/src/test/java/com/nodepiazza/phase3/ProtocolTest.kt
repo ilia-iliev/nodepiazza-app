@@ -123,4 +123,47 @@ class ProtocolTest {
     fun labelFor_takesLastSixHexChars() {
         assertEquals("peer-ABCDEF", labelFor("12:34:56:AB:CD:EF"))
     }
+
+    @Test
+    fun promptsPayload_roundTrips() {
+        val src = listOf("tennis partner", "espresso", "road bike")
+        val decoded = PromptsPayload.decode(PromptsPayload.encode(src))
+        assertEquals(src, decoded)
+    }
+
+    @Test
+    fun promptsPayload_capsAtMaxPromptsPerDevice() {
+        val many = List(Protocol.MAX_PROMPTS_PER_DEVICE + 5) { "p$it" }
+        val decoded = PromptsPayload.decode(PromptsPayload.encode(many))
+        assertEquals(Protocol.MAX_PROMPTS_PER_DEVICE, decoded.size)
+    }
+
+    @Test
+    fun promptsPayload_truncatesLongPrompt() {
+        val long = "x".repeat(Protocol.MAX_PROMPT_BYTES + 50)
+        val decoded = PromptsPayload.decode(PromptsPayload.encode(listOf(long)))
+        assertEquals(1, decoded.size)
+        assertEquals(Protocol.MAX_PROMPT_BYTES, decoded[0].length)
+    }
+
+    @Test
+    fun promptsPayload_rejectsWrongVersion() {
+        val good = PromptsPayload.encode(listOf("hi"))
+        good[0] = 99
+        assertEquals(0, PromptsPayload.decode(good).size)
+    }
+
+    @Test
+    fun promptsPayload_truncatedReturnsPartial() {
+        val good = PromptsPayload.encode(listOf("alpha", "beta"))
+        val truncated = good.copyOf(good.size - 2)
+        val decoded = PromptsPayload.decode(truncated)
+        assertTrue(decoded.size <= 1)
+    }
+
+    @Test
+    fun promptsPayload_emptyOrTooShort_returnsEmpty() {
+        assertEquals(0, PromptsPayload.decode(ByteArray(0)).size)
+        assertEquals(0, PromptsPayload.decode(ByteArray(1)).size)
+    }
 }

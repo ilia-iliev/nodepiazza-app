@@ -3,6 +3,7 @@ package com.nodepiazza.phase3
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -15,6 +16,8 @@ class StubLlmServiceTest {
         val result = svc.match(listOf("road bike", "espresso"))
         assertTrue(result.matched)
         assertTrue(result.reasoning.contains("espresso"))
+        assertEquals("espresso", result.myPrompt)
+        assertEquals("espresso", result.peerPrompt)
     }
 
     @Test
@@ -25,6 +28,8 @@ class StubLlmServiceTest {
         assertFalse(result.matched)
         assertTrue(result.reasoning.contains("1"))
         assertTrue(result.reasoning.contains("2"))
+        assertNull(result.myPrompt)
+        assertNull(result.peerPrompt)
     }
 
     @Test

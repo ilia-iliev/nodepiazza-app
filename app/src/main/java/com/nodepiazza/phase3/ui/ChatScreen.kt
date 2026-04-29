@@ -20,8 +20,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -63,7 +64,15 @@ fun ChatScreen(state: AppState, ble: BleCore, address: String) {
                 title = { Text(peer?.label ?: "chat") },
                 navigationIcon = {
                     IconButton(onClick = { state.closeChat() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = {
+                        ble.rejectPeer(address)
+                        state.closeChat()
+                    }) {
+                        Icon(Icons.Default.Block, contentDescription = "reject")
                     }
                 },
             )
@@ -102,7 +111,7 @@ fun ChatScreen(state: AppState, ble: BleCore, address: String) {
                     },
                     enabled = draft.isNotBlank(),
                 ) {
-                    Icon(Icons.Default.Send, contentDescription = "send")
+                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "send")
                 }
             }
         }
