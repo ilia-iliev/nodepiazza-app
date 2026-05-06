@@ -57,6 +57,8 @@ fun MainScreen(state: AppState) {
                 .padding(padding)
                 .imePadding(),
         ) {
+            val matched = peers.values.filter { it.matched }.sortedByDescending { it.similarity }
+            val others = peers.values.filterNot { it.matched }.sortedBy { it.label }
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -79,16 +81,23 @@ fun MainScreen(state: AppState) {
 
                 item { Spacer(Modifier.height(16.dp)) }
                 item { SectionLabel("Nearby") }
-                val sortedPeers = peers.values.sortedByDescending { it.similarity }
-                items(sortedPeers, key = { it.address }) { peer ->
-                    PeerRow(peer, onOpen = { if (peer.matched) state.openChat(peer.address) })
-                }
-                if (sortedPeers.isEmpty()) {
+                if (matched.isEmpty()) {
                     item {
                         Text(
-                            "Scanning for nearby peers…",
+                            "No matches yet — add prompts and stay near other users.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                }
+                items(matched, key = { it.address }) { peer ->
+                    MatchedPeerRow(peer, onOpen = { state.openChat(peer.address) })
+                }
+
+                if (others.isNotEmpty()) {
+                    item { Spacer(Modifier.height(16.dp)) }
+                    item { SectionLabel("Other devices nearby") }
+                    items(others, key = { it.address }) { peer ->
+                        OtherPeerRow(peer)
                     }
                 }
             }
@@ -130,10 +139,9 @@ private fun PromptRow(text: String, onDelete: () -> Unit) {
 }
 
 @Composable
-private fun PeerRow(peer: Peer, onOpen: () -> Unit) {
-    val color = if (peer.matched) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+private fun MatchedPeerRow(peer: Peer, onOpen: () -> Unit) {
     Card(
-        colors = CardDefaults.cardColors(containerColor = color),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
         onClick = onOpen,
     ) {
         Row(
@@ -142,14 +150,8 @@ private fun PeerRow(peer: Peer, onOpen: () -> Unit) {
         ) {
             Column(Modifier.weight(1f)) {
                 Text(peer.label, fontWeight = FontWeight.Medium)
-                val status = when {
-                    !peer.connected -> "connecting…"
-                    peer.matched -> "match — tap to chat"
-                    peer.similarity > 0f -> "similarity ${"%.2f".format(peer.similarity)}"
-                    else -> "handshaking…"
-                }
                 Text(
-                    status,
+                    "tap to chat",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -157,6 +159,28 @@ private fun PeerRow(peer: Peer, onOpen: () -> Unit) {
             if (peer.similarity > 0f) {
                 Text("%.2f".format(peer.similarity), style = MaterialTheme.typography.bodyMedium)
             }
+        }
+    }
+}
+
+@Composable
+private fun OtherPeerRow(peer: Peer) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            peer.label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        if (peer.similarity > 0f) {
+            Text(
+                "%.2f".format(peer.similarity),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

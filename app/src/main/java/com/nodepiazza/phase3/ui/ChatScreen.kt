@@ -31,7 +31,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,10 +52,6 @@ fun ChatScreen(state: AppState, ble: BleCore, address: String) {
     val peer = peers[address]
     var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
-
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
-    }
 
     Scaffold(
         topBar = {
@@ -89,8 +84,9 @@ fun ChatScreen(state: AppState, ble: BleCore, address: String) {
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
                 contentPadding = PaddingValues(vertical = 12.dp),
+                reverseLayout = true,
             ) {
-                items(messages) { MessageBubble(it) }
+                items(messages.asReversed()) { MessageBubble(it) }
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(12.dp),
