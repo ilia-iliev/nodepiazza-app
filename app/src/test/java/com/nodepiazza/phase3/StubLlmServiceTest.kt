@@ -15,8 +15,6 @@ class StubLlmServiceTest {
         svc.setMyPrompts(listOf("tennis partner", "espresso"))
         val result = svc.match(listOf("road bike", "espresso"))
         assertTrue(result.matched)
-        assertTrue(result.reasoning.contains("espresso"))
-        assertEquals("espresso", result.myPrompt)
         assertEquals("espresso", result.peerPrompt)
     }
 
@@ -26,9 +24,6 @@ class StubLlmServiceTest {
         svc.setMyPrompts(listOf("tennis partner"))
         val result = svc.match(listOf("road bike", "vintage camera"))
         assertFalse(result.matched)
-        assertTrue(result.reasoning.contains("1"))
-        assertTrue(result.reasoning.contains("2"))
-        assertNull(result.myPrompt)
         assertNull(result.peerPrompt)
     }
 

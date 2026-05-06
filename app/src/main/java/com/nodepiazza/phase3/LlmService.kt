@@ -1,5 +1,13 @@
 package com.nodepiazza.phase3
 
+/**
+ * Stage-2 of the match pipeline: after the embedding gate passes, exchange prompt texts and ask
+ * an LLM whether any of them really overlap. The stub matches on normalized equality so tests are
+ * deterministic.
+ *
+ * TODO: swap [StubLlmService] for a real LLM-backed matcher (server call or on-device) — keep
+ *  this interface stable so [BleCore] and the notification path don't need to change.
+ */
 interface LlmService {
     suspend fun setMyPrompts(prompts: List<String>)
     suspend fun match(peerPrompts: List<String>): LlmMatch
@@ -7,8 +15,6 @@ interface LlmService {
 
 data class LlmMatch(
     val matched: Boolean,
-    val reasoning: String,
-    val myPrompt: String? = null,
     val peerPrompt: String? = null,
 )
 
@@ -21,19 +27,11 @@ class StubLlmService : LlmService {
     }
 
     override suspend fun match(peerPrompts: List<String>): LlmMatch {
-        val hit = peerPrompts.firstOrNull { it in myPrompts }
-        return if (hit != null) {
-            LlmMatch(
-                matched = true,
-                reasoning = "exact match: \"$hit\"",
-                myPrompt = hit,
-                peerPrompt = hit,
-            )
-        } else {
-            LlmMatch(
-                matched = false,
-                reasoning = "no exact match (${myPrompts.size} mine × ${peerPrompts.size} theirs)",
-            )
-        }
+        // Embeddings already normalize (lowercase + word split), so the gate above can pass with
+        // "Pizza" vs "pizza" — match the LLM stub to that contract instead of strict equality.
+        fun norm(s: String) = s.trim().lowercase()
+        val mineNorm = myPrompts.map(::norm)
+        val peerHit = peerPrompts.firstOrNull { norm(it) in mineNorm }
+        return LlmMatch(matched = peerHit != null, peerPrompt = peerHit)
     }
 }

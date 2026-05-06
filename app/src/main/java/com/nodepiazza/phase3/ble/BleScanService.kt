@@ -26,7 +26,7 @@ class BleScanService : Service() {
         val state = AppState.get(this)
         Services.init(this, state)
         createChannel()
-        ensureMatchChannel(this)
+        ensureMatchChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -65,8 +65,8 @@ class BleScanService : Service() {
         mgr.createNotificationChannel(channel)
     }
 
-    private fun ensureMatchChannel(context: Context) {
-        val mgr = context.getSystemService(NotificationManager::class.java) ?: return
+    private fun ensureMatchChannel() {
+        val mgr = getSystemService(NotificationManager::class.java) ?: return
         if (mgr.getNotificationChannel(MATCH_CHANNEL_ID) != null) return
         val channel = NotificationChannel(
             MATCH_CHANNEL_ID,

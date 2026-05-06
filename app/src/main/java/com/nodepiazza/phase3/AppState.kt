@@ -19,7 +19,6 @@ data class Peer(
     val label: String,
     val similarity: Float,
     val matched: Boolean,
-    val connected: Boolean,
 )
 
 enum class ChatSender { Me, Them }
@@ -68,6 +67,13 @@ class AppState private constructor(context: Context) {
 
     fun upsertPeer(peer: Peer) {
         _peers.update { it + (peer.address to peer) }
+    }
+
+    fun updatePeer(address: String, transform: (Peer) -> Peer) {
+        _peers.update { current ->
+            val existing = current[address] ?: return@update current
+            current + (address to transform(existing))
+        }
     }
 
     fun removePeer(address: String) {
