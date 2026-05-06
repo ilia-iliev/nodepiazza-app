@@ -33,9 +33,13 @@ class AppState private constructor(context: Context) {
 
     private val file: File = File(context.filesDir, "prompts.json")
     private val json = Json { ignoreUnknownKeys = true }
+    private val prefs = context.getSharedPreferences("nodepiazza", Context.MODE_PRIVATE)
 
     private val _prompts = MutableStateFlow<List<Prompt>>(loadPrompts())
     val prompts: StateFlow<List<Prompt>> = _prompts.asStateFlow()
+
+    private val _bleEnabled = MutableStateFlow(prefs.getBoolean(KEY_BLE_ENABLED, true))
+    val bleEnabled: StateFlow<Boolean> = _bleEnabled.asStateFlow()
 
     private val _peers = MutableStateFlow<Map<String, Peer>>(emptyMap())
     val peers: StateFlow<Map<String, Peer>> = _peers.asStateFlow()
@@ -59,6 +63,12 @@ class AppState private constructor(context: Context) {
     fun removePrompt(id: String) {
         _prompts.update { list -> list.filterNot { it.id == id } }
         persistPrompts()
+    }
+
+    fun setBleEnabled(enabled: Boolean) {
+        if (_bleEnabled.value == enabled) return
+        _bleEnabled.value = enabled
+        prefs.edit().putBoolean(KEY_BLE_ENABLED, enabled).apply()
     }
 
     fun myEmbeddings(): List<ByteArray> = _prompts.value.map { embed(it.text).toInt8Bytes() }
@@ -110,6 +120,8 @@ class AppState private constructor(context: Context) {
     }
 
     companion object {
+        private const val KEY_BLE_ENABLED = "ble_enabled"
+
         @Volatile private var instance: AppState? = null
         fun get(context: Context): AppState =
             instance ?: synchronized(this) {

@@ -110,6 +110,11 @@ class BleScanService : Service() {
             context.startForegroundService(intent)
         }
 
+        fun stop(context: Context) {
+            val intent = Intent(context, BleScanService::class.java)
+            context.stopService(intent)
+        }
+
         fun notifyMatch(context: Context, address: String, label: String, peerPrompt: String?) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)

@@ -25,6 +25,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -44,11 +45,31 @@ import com.nodepiazza.phase3.Peer
 fun MainScreen(state: AppState) {
     val prompts by state.prompts.collectAsStateWithLifecycle()
     val peers by state.peers.collectAsStateWithLifecycle()
+    val bleEnabled by state.bleEnabled.collectAsStateWithLifecycle()
     var draft by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("nodepiazza") })
+            TopAppBar(
+                title = { Text("nodepiazza") },
+                actions = {
+                    Row(
+                        modifier = Modifier.padding(end = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (bleEnabled) "Bluetooth on" else "Bluetooth off",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Switch(
+                            checked = bleEnabled,
+                            onCheckedChange = { state.setBleEnabled(it) },
+                        )
+                    }
+                },
+            )
         },
     ) { padding ->
         Column(

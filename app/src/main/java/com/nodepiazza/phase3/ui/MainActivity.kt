@@ -31,7 +31,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         appState = AppState.get(this)
         Services.init(this, appState)
-        if (hasAllPermissions(this)) BleScanService.start(this)
         handleOpenChatIntent(intent)
 
         setContent {
@@ -63,16 +62,24 @@ class MainActivity : ComponentActivity() {
 fun RootScreen(state: AppState, ble: BleCore) {
     val ctx = LocalContext.current
     var granted by remember { mutableStateOf(hasAllPermissions(ctx)) }
+    val bleEnabled by state.bleEnabled.collectAsStateWithLifecycle()
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
     ) { result ->
         granted = result.values.all { it }
-        if (granted) BleScanService.start(ctx)
     }
 
     LaunchedEffect(Unit) {
         if (!granted) launcher.launch(requiredPermissions())
+    }
+
+    LaunchedEffect(granted, bleEnabled) {
+        if (granted && bleEnabled) {
+            BleScanService.start(ctx)
+        } else {
+            BleScanService.stop(ctx)
+        }
     }
 
     if (!granted) {
