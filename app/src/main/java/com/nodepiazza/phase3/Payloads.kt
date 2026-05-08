@@ -1,19 +1,28 @@
 package com.nodepiazza.phase3
 
 import java.nio.ByteBuffer
+import java.util.UUID
 
 /**
- * Pack a list of prompt embeddings into a single characteristic payload.
- * Format: [version:1][count:1][dims:1][embedding_0 ... embedding_n], each embedding is `dims` int8 bytes.
+ * Pack a list of prompt embeddings into a single characteristic payload, prefixed with a stable
+ * per-install device ID so the receiver can dedupe across BLE address rotations.
+ *
+ * Format: [version:1][deviceId:16][count:1][dims:1][embedding_0 ... embedding_n], each embedding
+ * is `dims` int8 bytes.
  */
 object EmbeddingPayload {
-    private const val VERSION: Byte = 1
+    private const val VERSION: Byte = 2
+    private const val DEVICE_ID_BYTES = 16
+    private const val HEADER_BYTES = 1 + DEVICE_ID_BYTES + 2
 
-    fun encode(embeddings: List<ByteArray>): ByteArray {
+    data class Decoded(val deviceId: String, val embeddings: List<ByteArray>)
+
+    fun encode(deviceId: String, embeddings: List<ByteArray>): ByteArray {
         val capped = embeddings.take(Protocol.MAX_PROMPTS_PER_DEVICE)
         val dims = Protocol.EMBEDDING_DIMS
-        val buf = ByteBuffer.allocate(3 + capped.size * dims)
+        val buf = ByteBuffer.allocate(HEADER_BYTES + capped.size * dims)
         buf.put(VERSION)
+        buf.put(uuidToBytes(deviceId))
         buf.put(capped.size.toByte())
         buf.put(dims.toByte())
         for (e in capped) {
@@ -23,16 +32,34 @@ object EmbeddingPayload {
         return buf.array()
     }
 
-    fun decode(bytes: ByteArray): List<ByteArray> {
-        if (bytes.size < 3 || bytes[0] != VERSION) return emptyList()
-        val count = bytes[1].toInt() and 0xFF
-        val dims = bytes[2].toInt() and 0xFF
-        if (dims != Protocol.EMBEDDING_DIMS) return emptyList()
-        val expected = 3 + count * dims
-        if (bytes.size < expected) return emptyList()
-        return List(count) { i ->
-            bytes.copyOfRange(3 + i * dims, 3 + (i + 1) * dims)
+    fun decode(bytes: ByteArray): Decoded? {
+        if (bytes.size < HEADER_BYTES || bytes[0] != VERSION) return null
+        val deviceId = bytesToUuid(bytes, 1) ?: return null
+        val count = bytes[1 + DEVICE_ID_BYTES].toInt() and 0xFF
+        val dims = bytes[2 + DEVICE_ID_BYTES].toInt() and 0xFF
+        if (dims != Protocol.EMBEDDING_DIMS) return null
+        val expected = HEADER_BYTES + count * dims
+        if (bytes.size < expected) return null
+        val embeddings = List(count) { i ->
+            bytes.copyOfRange(HEADER_BYTES + i * dims, HEADER_BYTES + (i + 1) * dims)
         }
+        return Decoded(deviceId, embeddings)
+    }
+
+    private fun uuidToBytes(id: String): ByteArray {
+        val uuid = UUID.fromString(id)
+        return ByteBuffer.allocate(DEVICE_ID_BYTES)
+            .putLong(uuid.mostSignificantBits)
+            .putLong(uuid.leastSignificantBits)
+            .array()
+    }
+
+    private fun bytesToUuid(bytes: ByteArray, offset: Int): String? {
+        if (bytes.size < offset + DEVICE_ID_BYTES) return null
+        val buf = ByteBuffer.wrap(bytes, offset, DEVICE_ID_BYTES)
+        val msb = buf.long
+        val lsb = buf.long
+        return UUID(msb, lsb).toString()
     }
 }
 

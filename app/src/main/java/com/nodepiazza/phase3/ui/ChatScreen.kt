@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -45,11 +44,11 @@ import com.nodepiazza.phase3.ChatSender
 import com.nodepiazza.phase3.ble.BleCore
 
 @Composable
-fun ChatScreen(state: AppState, ble: BleCore, address: String) {
+fun ChatScreen(state: AppState, ble: BleCore, deviceId: String) {
     val chats by state.chats.collectAsStateWithLifecycle()
-    val messages = chats[address] ?: emptyList()
+    val messages = chats[deviceId] ?: emptyList()
     val peers by state.peers.collectAsStateWithLifecycle()
-    val peer = peers[address]
+    val peer = peers[deviceId]
     var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
@@ -64,7 +63,7 @@ fun ChatScreen(state: AppState, ble: BleCore, address: String) {
                 },
                 actions = {
                     IconButton(onClick = {
-                        ble.rejectPeer(address)
+                        ble.rejectPeer(deviceId)
                         state.closeChat()
                     }) {
                         Icon(Icons.Default.Block, contentDescription = "reject")
@@ -76,20 +75,20 @@ fun ChatScreen(state: AppState, ble: BleCore, address: String) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .imePadding(),
+                .padding(padding),
         ) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom),
                 contentPadding = PaddingValues(vertical = 12.dp),
-                reverseLayout = true,
             ) {
-                items(messages.asReversed()) { MessageBubble(it) }
+                items(messages) { MessageBubble(it) }
             }
             Row(
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 24.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 OutlinedTextField(
@@ -102,7 +101,7 @@ fun ChatScreen(state: AppState, ble: BleCore, address: String) {
                 Spacer(Modifier.width(8.dp))
                 IconButton(
                     onClick = {
-                        ble.sendChatMessage(address, draft)
+                        ble.sendChatMessage(deviceId, draft)
                         draft = ""
                     },
                     enabled = draft.isNotBlank(),

@@ -10,12 +10,19 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.UUID
 
 @Serializable
 data class Prompt(val id: String, val text: String)
 
+/**
+ * One match-eligible peer, identified by a stable [deviceId] that persists across BLE address
+ * rotations. [addresses] holds every BLE address we've observed for this peer so we can dedupe
+ * scan hits and route outbound writes to a known-good link.
+ */
 data class Peer(
-    val address: String,
+    val deviceId: String,
+    val addresses: Set<String>,
     val label: String,
     val similarity: Float,
     val matched: Boolean,
@@ -35,6 +42,14 @@ class AppState private constructor(context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
     private val prefs = context.getSharedPreferences("nodepiazza", Context.MODE_PRIVATE)
 
+    val myDeviceId: String = run {
+        val saved = prefs.getString(KEY_DEVICE_ID, null)
+        if (saved != null) return@run saved
+        val fresh = UUID.randomUUID().toString()
+        prefs.edit().putString(KEY_DEVICE_ID, fresh).apply()
+        fresh
+    }
+
     private val _prompts = MutableStateFlow<List<Prompt>>(loadPrompts())
     val prompts: StateFlow<List<Prompt>> = _prompts.asStateFlow()
 
@@ -44,8 +59,8 @@ class AppState private constructor(context: Context) {
     private val _peers = MutableStateFlow<Map<String, Peer>>(emptyMap())
     val peers: StateFlow<Map<String, Peer>> = _peers.asStateFlow()
 
-    private val _activeChatAddress = MutableStateFlow<String?>(null)
-    val activeChatAddress: StateFlow<String?> = _activeChatAddress.asStateFlow()
+    private val _activeChatDeviceId = MutableStateFlow<String?>(null)
+    val activeChatDeviceId: StateFlow<String?> = _activeChatDeviceId.asStateFlow()
 
     private val _chats = MutableStateFlow<Map<String, List<ChatMessage>>>(emptyMap())
     val chats: StateFlow<Map<String, List<ChatMessage>>> = _chats.asStateFlow()
@@ -56,7 +71,7 @@ class AppState private constructor(context: Context) {
     fun addPrompt(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
-        _prompts.update { it + Prompt(id = java.util.UUID.randomUUID().toString(), text = trimmed) }
+        _prompts.update { it + Prompt(id = UUID.randomUUID().toString(), text = trimmed) }
         persistPrompts()
     }
 
@@ -76,37 +91,39 @@ class AppState private constructor(context: Context) {
     fun myPromptTexts(): List<String> = _prompts.value.map { it.text }
 
     fun upsertPeer(peer: Peer) {
-        _peers.update { it + (peer.address to peer) }
+        _peers.update { it + (peer.deviceId to peer) }
     }
 
-    fun updatePeer(address: String, transform: (Peer) -> Peer) {
+    fun updatePeer(deviceId: String, transform: (Peer) -> Peer) {
         _peers.update { current ->
-            val existing = current[address] ?: return@update current
-            current + (address to transform(existing))
+            val existing = current[deviceId] ?: return@update current
+            current + (deviceId to transform(existing))
         }
     }
 
-    fun removePeer(address: String) {
-        _peers.update { it - address }
+    fun removePeer(deviceId: String) {
+        _peers.update { it - deviceId }
+        _chats.update { it - deviceId }
+        if (_activeChatDeviceId.value == deviceId) _activeChatDeviceId.value = null
     }
 
-    fun openChat(address: String) {
-        _activeChatAddress.value = address
+    fun openChat(deviceId: String) {
+        _activeChatDeviceId.value = deviceId
     }
 
     fun closeChat() {
-        _activeChatAddress.value = null
+        _activeChatDeviceId.value = null
     }
 
-    fun appendChat(address: String, message: ChatMessage) {
+    fun appendChat(deviceId: String, message: ChatMessage) {
         _chats.update { current ->
-            val existing = current[address].orEmpty()
-            current + (address to (existing + message))
+            val existing = current[deviceId].orEmpty()
+            current + (deviceId to (existing + message))
         }
     }
 
     /** First-time-seen check for matches in this process. Returns true the first time. */
-    fun markMatchSeen(address: String): Boolean = seenMatches.add(address)
+    fun markMatchSeen(deviceId: String): Boolean = seenMatches.add(deviceId)
 
     private fun loadPrompts(): List<Prompt> {
         if (!file.exists()) return emptyList()
@@ -121,6 +138,7 @@ class AppState private constructor(context: Context) {
 
     companion object {
         private const val KEY_BLE_ENABLED = "ble_enabled"
+        private const val KEY_DEVICE_ID = "device_id"
 
         @Volatile private var instance: AppState? = null
         fun get(context: Context): AppState =

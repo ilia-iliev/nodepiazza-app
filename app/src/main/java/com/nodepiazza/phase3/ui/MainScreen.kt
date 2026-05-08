@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -58,7 +57,7 @@ fun MainScreen(state: AppState) {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            if (bleEnabled) "Bluetooth on" else "Bluetooth off",
+                            if (bleEnabled) "Scan on" else "Scan off",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -75,8 +74,7 @@ fun MainScreen(state: AppState) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .imePadding(),
+                .padding(padding),
         ) {
             val matched = peers.values.filter { it.matched }.sortedByDescending { it.similarity }
             val others = peers.values.filterNot { it.matched }.sortedBy { it.label }
@@ -110,14 +108,14 @@ fun MainScreen(state: AppState) {
                         )
                     }
                 }
-                items(matched, key = { it.address }) { peer ->
-                    MatchedPeerRow(peer, onOpen = { state.openChat(peer.address) })
+                items(matched, key = { it.deviceId }) { peer ->
+                    MatchedPeerRow(peer, onOpen = { state.openChat(peer.deviceId) })
                 }
 
                 if (others.isNotEmpty()) {
                     item { Spacer(Modifier.height(16.dp)) }
                     item { SectionLabel("Other devices nearby") }
-                    items(others, key = { it.address }) { peer ->
+                    items(others, key = { it.deviceId }) { peer ->
                         OtherPeerRow(peer)
                     }
                 }
@@ -146,7 +144,12 @@ private fun SectionLabel(text: String) {
 
 @Composable
 private fun PromptRow(text: String, onDelete: () -> Unit) {
-    Card(colors = CardDefaults.cardColors()) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ),
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -209,7 +212,9 @@ private fun OtherPeerRow(peer: Peer) {
 @Composable
 private fun PromptComposer(value: String, onValueChange: (String) -> Unit, onSubmit: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 24.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         OutlinedTextField(

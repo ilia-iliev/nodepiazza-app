@@ -115,18 +115,18 @@ class BleScanService : Service() {
             context.stopService(intent)
         }
 
-        fun notifyMatch(context: Context, address: String, label: String, peerPrompt: String?) {
+        fun notifyMatch(context: Context, deviceId: String, label: String, peerPrompt: String?) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED
             ) return
             val openIntent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                putExtra(MainActivity.EXTRA_OPEN_CHAT_ADDRESS, address)
+                putExtra(MainActivity.EXTRA_OPEN_CHAT_DEVICE_ID, deviceId)
             }
             val pi = PendingIntent.getActivity(
                 context,
-                address.hashCode(),
+                deviceId.hashCode(),
                 openIntent,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
@@ -146,7 +146,7 @@ class BleScanService : Service() {
                 .build()
             runCatching {
                 NotificationManagerCompat.from(context)
-                    .notify(address, MATCH_NOTIFICATION_ID, notification)
+                    .notify(deviceId, MATCH_NOTIFICATION_ID, notification)
             }
         }
     }

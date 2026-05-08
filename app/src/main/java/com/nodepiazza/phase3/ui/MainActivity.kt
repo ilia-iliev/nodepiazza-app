@@ -5,6 +5,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
@@ -29,12 +30,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         appState = AppState.get(this)
         Services.init(this, appState)
         handleOpenChatIntent(intent)
 
         setContent {
-            MaterialTheme {
+            MaterialTheme(colorScheme = NodepiazzaLightColors) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     RootScreen(appState, Services.ble)
                 }
@@ -49,12 +51,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleOpenChatIntent(intent: Intent?) {
-        val addr = intent?.getStringExtra(EXTRA_OPEN_CHAT_ADDRESS) ?: return
-        appState.openChat(addr)
+        val deviceId = intent?.getStringExtra(EXTRA_OPEN_CHAT_DEVICE_ID) ?: return
+        appState.openChat(deviceId)
     }
 
     companion object {
-        const val EXTRA_OPEN_CHAT_ADDRESS = "open_chat_address"
+        const val EXTRA_OPEN_CHAT_DEVICE_ID = "open_chat_device_id"
     }
 }
 
@@ -87,7 +89,7 @@ fun RootScreen(state: AppState, ble: BleCore) {
         return
     }
 
-    val activeChat by state.activeChatAddress.collectAsStateWithLifecycle()
+    val activeChat by state.activeChatDeviceId.collectAsStateWithLifecycle()
     if (activeChat != null) {
         ChatScreen(state, ble, activeChat!!)
     } else {

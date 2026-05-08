@@ -4,6 +4,7 @@ import com.nodepiazza.phase3.ble.labelFor
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.sqrt
@@ -75,48 +76,55 @@ class ProtocolTest {
 
     @Test
     fun embeddingPayload_roundTrips() {
+        val devId = java.util.UUID.randomUUID().toString()
         val src = listOf(
             embed("tennis partner").toInt8Bytes(),
             embed("espresso").toInt8Bytes(),
             embed("road bike").toInt8Bytes(),
         )
-        val decoded = EmbeddingPayload.decode(EmbeddingPayload.encode(src))
-        assertEquals(src.size, decoded.size)
-        for (i in src.indices) assertArrayEquals(src[i], decoded[i])
+        val decoded = EmbeddingPayload.decode(EmbeddingPayload.encode(devId, src))
+        assertEquals(devId, decoded?.deviceId)
+        assertEquals(src.size, decoded?.embeddings?.size)
+        for (i in src.indices) assertArrayEquals(src[i], decoded?.embeddings?.get(i))
     }
 
     @Test
     fun embeddingPayload_capsAtMaxPromptsPerDevice() {
+        val devId = java.util.UUID.randomUUID().toString()
         val many = List(Protocol.MAX_PROMPTS_PER_DEVICE + 5) { embed("p$it").toInt8Bytes() }
-        val decoded = EmbeddingPayload.decode(EmbeddingPayload.encode(many))
-        assertEquals(Protocol.MAX_PROMPTS_PER_DEVICE, decoded.size)
+        val decoded = EmbeddingPayload.decode(EmbeddingPayload.encode(devId, many))
+        assertEquals(Protocol.MAX_PROMPTS_PER_DEVICE, decoded?.embeddings?.size)
     }
 
     @Test
     fun embeddingPayload_rejectsWrongVersion() {
-        val good = EmbeddingPayload.encode(listOf(embed("x").toInt8Bytes()))
+        val devId = java.util.UUID.randomUUID().toString()
+        val good = EmbeddingPayload.encode(devId, listOf(embed("x").toInt8Bytes()))
         good[0] = 99
-        assertEquals(0, EmbeddingPayload.decode(good).size)
+        assertNull(EmbeddingPayload.decode(good))
     }
 
     @Test
     fun embeddingPayload_rejectsWrongDims() {
-        val good = EmbeddingPayload.encode(listOf(embed("x").toInt8Bytes()))
-        good[2] = (Protocol.EMBEDDING_DIMS - 1).toByte()
-        assertEquals(0, EmbeddingPayload.decode(good).size)
+        val devId = java.util.UUID.randomUUID().toString()
+        val good = EmbeddingPayload.encode(devId, listOf(embed("x").toInt8Bytes()))
+        // Header layout: [version:1][deviceId:16][count:1][dims:1]; dims is at index 18.
+        good[18] = (Protocol.EMBEDDING_DIMS - 1).toByte()
+        assertNull(EmbeddingPayload.decode(good))
     }
 
     @Test
     fun embeddingPayload_rejectsTruncated() {
-        val good = EmbeddingPayload.encode(listOf(embed("x").toInt8Bytes()))
+        val devId = java.util.UUID.randomUUID().toString()
+        val good = EmbeddingPayload.encode(devId, listOf(embed("x").toInt8Bytes()))
         val truncated = good.copyOf(good.size - 10)
-        assertEquals(0, EmbeddingPayload.decode(truncated).size)
+        assertNull(EmbeddingPayload.decode(truncated))
     }
 
     @Test
-    fun embeddingPayload_emptyOrTooShort_returnsEmpty() {
-        assertEquals(0, EmbeddingPayload.decode(ByteArray(0)).size)
-        assertEquals(0, EmbeddingPayload.decode(ByteArray(2)).size)
+    fun embeddingPayload_emptyOrTooShort_returnsNull() {
+        assertNull(EmbeddingPayload.decode(ByteArray(0)))
+        assertNull(EmbeddingPayload.decode(ByteArray(2)))
     }
 
     @Test
