@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.nodepiazza.phase3"
+    namespace = "com.nodepiazza"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.nodepiazza.phase3"
+        applicationId = "com.nodepiazza"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

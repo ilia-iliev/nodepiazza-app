@@ -27,19 +27,37 @@ Interests and compared against peers'; matched peers become tappable and open a 
 ## Project layout
 
 ```
-app/src/main/java/com/nodepiazza/phase3/
-├── Protocol.kt           # UUIDs, payload codec
-├── AppState.kt           # Prompts, peers, chat state
-├── Services.kt           # Service locator (llm, ble)
+app/src/main/java/com/nodepiazza/
+├── AppState.kt           # Persistent user state (interests, BLE toggle, about-me)
+├── Domain.kt             # Interest / Peer / ChatMessage / ChatSender
 ├── LlmService.kt         # LLM match interface + stub
+├── Services.kt           # Service locator (llm, ble, model registry)
+├── protocol/
+│   ├── Protocol.kt           # UUIDs + wire limits
+│   ├── ChatFraming.kt        # Multi-fragment chat framing
+│   └── InterestsPayload.kt   # Interests characteristic codec
 ├── ble/
-│   ├── BleCore.kt        # Scan, advertise, GATT server + client
-│   └── BleScanService.kt # Foreground service + match notifications
+│   ├── BleCore.kt            # Owns radio interactions; delegates to coordinator
+│   ├── BleScanner.kt         # Scan lifecycle wrapper
+│   ├── BleAdvertiser.kt      # Advertise lifecycle wrapper
+│   ├── PeerCoordinator.kt    # Pure decision layer (no Android deps)
+│   ├── ChatReassembler.kt    # Inbound fragment reassembly
+│   └── BleScanService.kt     # Foreground service + match notifications
+├── mlmodels/
+│   ├── ModelRegistry.kt      # On-device model file discovery
+│   ├── ModelPreferences.kt   # DataStore-backed selection + folder
+│   ├── ModelBootstrap.kt     # First-launch default-model download
+│   └── ModelDownloadWorker.kt
 └── ui/
-    ├── MainActivity.kt   # Activity + permission-gated RootScreen
-    ├── Permissions.kt    # Runtime permission helpers + gate UI
-    ├── MainScreen.kt     # Prompts and nearby peers list
-    └── ChatScreen.kt     # Per-peer chat
+    ├── MainActivity.kt       # Activity + permission-gated RootScreen
+    ├── Permissions.kt        # Runtime permission helpers + gate UI
+    ├── MainScreen.kt         # Top-level scaffold + lists
+    ├── InterestsSection.kt   # Interest chips, packing, edit UI
+    ├── AboutMeSection.kt     # Private about-me field
+    ├── PeerRows.kt           # Matched/other peer rows + scan status
+    ├── ChatScreen.kt         # Per-peer chat
+    ├── ModelPicker.kt        # Model-selection bottom sheet
+    └── Theme.kt
 ```
 
 ## Build

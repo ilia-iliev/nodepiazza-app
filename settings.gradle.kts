@@ -20,5 +20,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "nodepiazza-phase3"
+rootProject.name = "nodepiazza"
 include(":app")
