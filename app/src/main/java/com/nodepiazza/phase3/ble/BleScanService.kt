@@ -73,7 +73,7 @@ class BleScanService : Service() {
             "Matches",
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
-            description = "Notifies you when a nearby device matches one of your prompts"
+            description = "Notifies you when a nearby device matches one of your interests"
         }
         mgr.createNotificationChannel(channel)
     }
@@ -115,7 +115,7 @@ class BleScanService : Service() {
             context.stopService(intent)
         }
 
-        fun notifyMatch(context: Context, deviceId: String, label: String, peerPrompt: String?) {
+        fun notifyMatch(context: Context, deviceId: String, label: String, peerInterest: String?) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED
@@ -130,8 +130,8 @@ class BleScanService : Service() {
                 openIntent,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
-            val body = if (!peerPrompt.isNullOrBlank()) {
-                "$label: \"$peerPrompt\" — tap to chat"
+            val body = if (!peerInterest.isNullOrBlank()) {
+                "$label: \"$peerInterest\" — tap to chat"
             } else {
                 "$label is looking for similar things — tap to chat"
             }

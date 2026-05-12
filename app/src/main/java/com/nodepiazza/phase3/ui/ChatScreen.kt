@@ -38,16 +38,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.nodepiazza.phase3.AppState
 import com.nodepiazza.phase3.ChatMessage
 import com.nodepiazza.phase3.ChatSender
 import com.nodepiazza.phase3.ble.BleCore
+import com.nodepiazza.phase3.ble.PeerCoordinator
 
 @Composable
-fun ChatScreen(state: AppState, ble: BleCore, deviceId: String) {
-    val chats by state.chats.collectAsStateWithLifecycle()
+fun ChatScreen(coordinator: PeerCoordinator, ble: BleCore, deviceId: String) {
+    val chats by coordinator.chats.collectAsStateWithLifecycle()
     val messages = chats[deviceId] ?: emptyList()
-    val peers by state.peers.collectAsStateWithLifecycle()
+    val peers by coordinator.peers.collectAsStateWithLifecycle()
     val peer = peers[deviceId]
     var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -57,14 +57,14 @@ fun ChatScreen(state: AppState, ble: BleCore, deviceId: String) {
             TopAppBar(
                 title = { Text(peer?.label ?: "chat") },
                 navigationIcon = {
-                    IconButton(onClick = { state.closeChat() }) {
+                    IconButton(onClick = { coordinator.closeChat() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "back")
                     }
                 },
                 actions = {
                     IconButton(onClick = {
                         ble.rejectPeer(deviceId)
-                        state.closeChat()
+                        coordinator.closeChat()
                     }) {
                         Icon(Icons.Default.Block, contentDescription = "reject")
                     }

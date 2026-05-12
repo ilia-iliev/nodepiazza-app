@@ -21,12 +21,8 @@ import android.os.ParcelUuid
 import android.util.Log
 import com.nodepiazza.phase3.AppState
 import com.nodepiazza.phase3.ChatFraming
-import com.nodepiazza.phase3.ChatMessage
-import com.nodepiazza.phase3.ChatSender
-import com.nodepiazza.phase3.EmbeddingPayload
-import com.nodepiazza.phase3.Peer
 import com.nodepiazza.phase3.Protocol
-import com.nodepiazza.phase3.PromptsPayload
+import com.nodepiazza.phase3.InterestsPayload
 import com.nodepiazza.phase3.Services
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -38,25 +34,22 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val TAG = "BleCore"
-private const val NO_MATCH_TTL_MS = 10 * 60 * 1000L
 private const val LIVENESS_CHECK_INTERVAL_MS = 60 * 1000L
-private const val STALE_NO_MESSAGES_MS = 2 * 60 * 1000L
-private const val STALE_WITH_MESSAGES_MS = 30 * 60 * 1000L
 
 /**
- * Central coordinator for BLE scanning, advertising, GATT server, and per-peer client connections.
+ * Android adapter for [PeerCoordinator]. Owns the BLE radio interactions (scanning, advertising,
+ * GATT client + server, MTU exchange, frame queueing) and forwards every observation into the
+ * coordinator, then applies the coordinator's [PeerCoordinator.ScanDecision]-style replies.
  *
- * Each connection runs a single handshake: read peer embedding → if cosine ≥ MATCH_THRESHOLD,
- * read peer prompts → run LLM match. No-match peers are cached for 10 min and disconnected so we
- * don't keep reconnecting to the same rotating address.
- *
- * Peers are deduped by a stable per-install device ID exchanged in the embedding payload. The same
- * physical phone often shows up under several BLE addresses (rotating advertising address, plus a
- * separate central-side address when it connects to us as a client); they all collapse onto one
- * [Peer] keyed by device ID.
+ * Anything that doesn't depend on Android Bluetooth APIs lives in [PeerCoordinator] and is
+ * unit-tested there.
  */
 @SuppressLint("MissingPermission")
-class BleCore(private val context: Context, private val state: AppState) {
+class BleCore(
+    private val context: Context,
+    private val state: AppState,
+    private val coordinator: PeerCoordinator,
+) {
 
     private val manager = context.getSystemService(BluetoothManager::class.java)
     private val adapter = manager?.adapter
@@ -72,14 +65,6 @@ class BleCore(private val context: Context, private val state: AppState) {
     private val mtuByAddress = ConcurrentHashMap<String, Int>()
     private val sendQueues = ConcurrentHashMap<String, ArrayDeque<PendingWrite>>()
     private val sendInflight = ConcurrentHashMap<String, Boolean>()
-    private val noMatchUntilMs = ConcurrentHashMap<String, Long>()
-    private val rejectedDevices: MutableSet<String> = ConcurrentHashMap.newKeySet()
-    private val rejectedAddresses: MutableSet<String> = ConcurrentHashMap.newKeySet()
-    private val pendingTexts = ConcurrentHashMap<String, ArrayDeque<String>>()
-    private val forceMatchedAddresses: MutableSet<String> = ConcurrentHashMap.newKeySet()
-    private val deviceIdByAddress = ConcurrentHashMap<String, String>()
-    private val pendingInboundChats = ConcurrentHashMap<String, ArrayDeque<String>>()
-    private val lastSeenByDeviceId = ConcurrentHashMap<String, Long>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var livenessJob: Job? = null
 
@@ -90,6 +75,7 @@ class BleCore(private val context: Context, private val state: AppState) {
             return
         }
         running = true
+        Log.d(TAG, "BleCore.start: deviceId=${state.myDeviceId}")
         startGattServer()
         advertiser.start()
         startScanning()
@@ -109,61 +95,31 @@ class BleCore(private val context: Context, private val state: AppState) {
         sendQueues.clear()
         sendInflight.clear()
         chatReassembler.clear()
-        rejectedDevices.clear()
-        rejectedAddresses.clear()
-        noMatchUntilMs.clear()
-        pendingTexts.clear()
-        forceMatchedAddresses.clear()
-        deviceIdByAddress.clear()
-        pendingInboundChats.clear()
-        lastSeenByDeviceId.clear()
+        coordinator.resetOnBleStop()
         gattServer?.close()
         gattServer = null
     }
 
     fun sendChatMessage(deviceId: String, text: String) {
         if (text.isEmpty()) return
-        // Always show the user their own message, even if outbound delivery is queued/lost.
-        state.appendChat(deviceId, ChatMessage(ChatSender.Me, text))
-        val address = pickConnectedAddressFor(deviceId) ?: anyKnownAddressFor(deviceId)
-        if (address == null) {
-            Log.w(TAG, "sendChatMessage: no known address for device=$deviceId")
-            return
+        when (val d = coordinator.onSendChat(deviceId, text)) {
+            is PeerCoordinator.SendChatDecision.Send -> {
+                enqueueChatFrames(d.address, text)
+                pumpSend(d.address)
+            }
+            is PeerCoordinator.SendChatDecision.QueuedForReconnect -> {
+                Log.w(TAG, "sendChatMessage: no client to ${d.address}; queueing and reconnecting")
+                ensureClient(d.address)
+            }
+            PeerCoordinator.SendChatDecision.NoKnownAddress ->
+                Log.w(TAG, "sendChatMessage: no known address for device=$deviceId")
         }
-        val gatt = clients[address]
-        if (gatt == null) {
-            Log.w(TAG, "sendChatMessage: no client to $address; queueing and reconnecting")
-            val q = pendingTexts.getOrPut(address) { ArrayDeque() }
-            synchronized(q) { q.addLast(text) }
-            ensureClient(address)
-            return
-        }
-        enqueueChatFrames(address, text)
-        pumpSend(address)
     }
 
     fun rejectPeer(deviceId: String) {
-        rejectedDevices.add(deviceId)
-        val peer = state.peers.value[deviceId]
-        peer?.addresses?.forEach { addr ->
-            rejectedAddresses.add(addr)
-            forceMatchedAddresses.remove(addr)
-            pendingTexts.remove(addr)
-            pendingInboundChats.remove(addr)
-            clients[addr]?.let { runCatching { it.disconnect() } }
-        }
-        lastSeenByDeviceId.remove(deviceId)
-        state.markMatchSeen(deviceId)
-        state.removePeer(deviceId)
+        val addrs = coordinator.rejectPeer(deviceId)
+        for (addr in addrs) clients[addr]?.let { runCatching { it.disconnect() } }
     }
-
-    private fun pickConnectedAddressFor(deviceId: String): String? {
-        val peer = state.peers.value[deviceId] ?: return null
-        return peer.addresses.firstOrNull { clients.containsKey(it) }
-    }
-
-    private fun anyKnownAddressFor(deviceId: String): String? =
-        state.peers.value[deviceId]?.addresses?.firstOrNull()
 
     private fun enqueueChatFrames(address: String, text: String) {
         val mtu = mtuByAddress[address] ?: 23
@@ -176,29 +132,16 @@ class BleCore(private val context: Context, private val state: AppState) {
     /**
      * Open an outbound GATT to a peer we want to chat with. Used both when sending while
      * disconnected and when receiving from a peer we don't have an outbound link to (asymmetric
-     * connection). Marks the address force-matched so the embedding gate doesn't disconnect us.
+     * connection). Marks the address force-matched so the interests gate doesn't disconnect us.
      */
     private fun ensureClient(address: String) {
         if (clients.containsKey(address)) return
         val device = adapter?.getRemoteDevice(address) ?: return
-        forceMatchedAddresses.add(address)
-        noMatchUntilMs.remove(address)
+        coordinator.markForceMatched(address)
         val gatt = device.connectGatt(context, false, clientCallback) ?: return
         clients[address] = gatt
+        coordinator.onClientOpened(address)
         Log.d(TAG, "ensureClient: connecting to $address")
-    }
-
-    private fun drainPendingTexts(address: String) {
-        val q = pendingTexts[address] ?: return
-        val texts = synchronized(q) {
-            val list = q.toList()
-            q.clear()
-            list
-        }
-        if (texts.isEmpty()) return
-        Log.d(TAG, "drainPendingTexts: ${texts.size} for $address")
-        for (t in texts) enqueueChatFrames(address, t)
-        pumpSend(address)
     }
 
     private fun pumpSend(address: String) {
@@ -235,28 +178,26 @@ class BleCore(private val context: Context, private val state: AppState) {
         val server = manager?.openGattServer(context, serverCallback) ?: return
         gattServer = server
         val service = BluetoothGattService(Protocol.SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
-        val embeddingChar = BluetoothGattCharacteristic(
-            Protocol.EMBEDDING_CHAR_UUID,
-            BluetoothGattCharacteristic.PROPERTY_READ,
-            BluetoothGattCharacteristic.PERMISSION_READ,
-        )
         val chatChar = BluetoothGattCharacteristic(
             Protocol.CHAT_CHAR_UUID,
             BluetoothGattCharacteristic.PROPERTY_WRITE,
             BluetoothGattCharacteristic.PERMISSION_WRITE,
         )
-        val promptsChar = BluetoothGattCharacteristic(
-            Protocol.PROMPTS_CHAR_UUID,
+        val interestsChar = BluetoothGattCharacteristic(
+            Protocol.INTERESTS_CHAR_UUID,
             BluetoothGattCharacteristic.PROPERTY_READ,
             BluetoothGattCharacteristic.PERMISSION_READ,
         )
-        service.addCharacteristic(embeddingChar)
         service.addCharacteristic(chatChar)
-        service.addCharacteristic(promptsChar)
+        service.addCharacteristic(interestsChar)
         server.addService(service)
     }
 
     private val serverCallback = object : BluetoothGattServerCallback() {
+        override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
+            Log.d(TAG, "server conn change from=${device.address} status=$status newState=$newState")
+        }
+
         override fun onCharacteristicReadRequest(
             device: BluetoothDevice,
             requestId: Int,
@@ -264,9 +205,8 @@ class BleCore(private val context: Context, private val state: AppState) {
             characteristic: BluetoothGattCharacteristic,
         ) {
             val payload = when (characteristic.uuid) {
-                Protocol.EMBEDDING_CHAR_UUID ->
-                    EmbeddingPayload.encode(state.myDeviceId, state.myEmbeddings())
-                Protocol.PROMPTS_CHAR_UUID -> PromptsPayload.encode(state.myPromptTexts())
+                Protocol.INTERESTS_CHAR_UUID ->
+                    InterestsPayload.encode(state.myDeviceId, state.myInterestTexts())
                 else -> null
             }
             if (payload == null) {
@@ -298,53 +238,16 @@ class BleCore(private val context: Context, private val state: AppState) {
 
     private fun onChatMessageReceived(address: String, text: String) {
         Log.d(TAG, "chat received from=$address text='$text'")
-        val deviceId = deviceIdByAddress[address]
-        if (deviceId == null) {
-            // Asymmetric inbound: peer connected to our GATT server before we identified them.
-            // Buffer the text and open an outbound so the embedding handshake can resolve a deviceId.
-            Log.d(TAG, "chat from unknown $address; buffering pending identity")
-            val q = pendingInboundChats.getOrPut(address) { ArrayDeque() }
-            synchronized(q) { q.addLast(text) }
-            ensureClient(address)
-            return
+        when (val d = coordinator.onChatReceived(address, text)) {
+            PeerCoordinator.ChatReceiveDecision.Ignore -> Unit
+            PeerCoordinator.ChatReceiveDecision.BufferAndEnsureClient -> {
+                Log.d(TAG, "chat from unknown $address; buffering pending identity")
+                ensureClient(address)
+            }
+            is PeerCoordinator.ChatReceiveDecision.Delivered -> {
+                if (d.needsEnsureClient) ensureClient(address)
+            }
         }
-        if (rejectedDevices.contains(deviceId)) return
-        deliverChat(deviceId, address, text)
-    }
-
-    private fun deliverChat(deviceId: String, address: String, text: String) {
-        markSeen(deviceId)
-        state.appendChat(deviceId, ChatMessage(ChatSender.Them, text))
-        // Asymmetric-match recovery: a chat message proves the peer matched us. Surface them in
-        // the matched list (creating the entry if our own match check disconnected them) so the
-        // user can open the conversation.
-        val existing = state.peers.value[deviceId]
-        if (existing == null) {
-            state.upsertPeer(
-                Peer(
-                    deviceId = deviceId,
-                    addresses = setOf(address),
-                    label = labelFor(address),
-                    similarity = 0f,
-                    matched = true,
-                ),
-            )
-        } else if (!existing.matched) {
-            state.updatePeer(deviceId) { it.copy(matched = true) }
-        }
-        if (!clients.containsKey(address)) ensureClient(address)
-    }
-
-    private fun drainPendingInboundChats(address: String, deviceId: String) {
-        val q = pendingInboundChats.remove(address) ?: return
-        val texts = synchronized(q) {
-            val list = q.toList()
-            q.clear()
-            list
-        }
-        if (texts.isEmpty()) return
-        Log.d(TAG, "drainPendingInboundChats: ${texts.size} from $address (device=$deviceId)")
-        for (t in texts) deliverChat(deviceId, address, t)
     }
 
     // ---------- Scanning ----------
@@ -366,21 +269,13 @@ class BleCore(private val context: Context, private val state: AppState) {
     private fun handleScanResult(result: ScanResult) {
         val device = result.device ?: return
         val address = device.address ?: return
-        val knownDeviceId = deviceIdByAddress[address]
-        if (knownDeviceId != null) markSeen(knownDeviceId)
+        val decision = coordinator.onScanResult(address)
+        Log.d(TAG, "scan hit addr=$address rssi=${result.rssi} decision=$decision openClient=${clients.containsKey(address)}")
+        if (decision is PeerCoordinator.ScanDecision.Skip) return
         if (clients.containsKey(address)) return
-        if (rejectedAddresses.contains(address)) return
-        if (knownDeviceId != null && rejectedDevices.contains(knownDeviceId)) return
-        val until = noMatchUntilMs[address]
-        if (until != null) {
-            if (until > System.currentTimeMillis()) return
-            noMatchUntilMs.remove(address)
-        }
         val gatt = device.connectGatt(context, false, clientCallback) ?: return
         clients[address] = gatt
-        // Don't surface the peer until the embedding read reveals its deviceId; otherwise we'd
-        // risk creating a duplicate entry for an address that will turn out to be one we already
-        // know.
+        coordinator.onClientOpened(address)
     }
 
     private fun startScanning() {
@@ -417,7 +312,7 @@ class BleCore(private val context: Context, private val state: AppState) {
                     sendQueues.remove(address)
                     sendInflight.remove(address)
                     chatReassembler.forget(address)
-                    forgetAddress(address)
+                    coordinator.onDisconnected(address)
                 }
             }
         }
@@ -430,23 +325,19 @@ class BleCore(private val context: Context, private val state: AppState) {
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) return
             val ch = gatt.getService(Protocol.SERVICE_UUID)
-                ?.getCharacteristic(Protocol.EMBEDDING_CHAR_UUID) ?: return
+                ?.getCharacteristic(Protocol.INTERESTS_CHAR_UUID) ?: return
             gatt.readCharacteristic(ch)
         }
 
         override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            val address = gatt.device.address
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                pumpSend(gatt.device.address)
+                pumpSend(address)
                 return
             }
-            val address = gatt.device.address
             val data = characteristic.value ?: ByteArray(0)
-            when (characteristic.uuid) {
-                Protocol.EMBEDDING_CHAR_UUID -> handleEmbeddingRead(gatt, address, data)
-                Protocol.PROMPTS_CHAR_UUID -> {
-                    val deviceId = deviceIdByAddress[address]
-                    if (deviceId != null) handlePromptsRead(deviceId, address, data)
-                }
+            if (characteristic.uuid == Protocol.INTERESTS_CHAR_UUID) {
+                handleInterestsRead(gatt, address, data)
             }
             pumpSend(address)
         }
@@ -459,145 +350,56 @@ class BleCore(private val context: Context, private val state: AppState) {
             if (characteristic.uuid != Protocol.CHAT_CHAR_UUID) return
             val address = gatt.device.address
             Log.d(TAG, "onCharacteristicWrite to=$address status=$status")
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                deviceIdByAddress[address]?.let { markSeen(it) }
-            }
+            if (status == BluetoothGatt.GATT_SUCCESS) coordinator.onWriteAcknowledged(address)
             val q = sendQueues[address]
             if (q != null) synchronized(q) { sendInflight[address] = false }
             pumpSend(address)
         }
     }
 
-    private fun handleEmbeddingRead(gatt: BluetoothGatt, address: String, data: ByteArray) {
-        val decoded = EmbeddingPayload.decode(data)
-        if (decoded == null) {
-            Log.w(TAG, "embedding decode failed from=$address")
-            runCatching { gatt.disconnect() }
-            return
-        }
-        val deviceId = decoded.deviceId
-        if (deviceId == state.myDeviceId) {
-            // Loopback: we connected to ourselves (rare, but possible if two adapters with the
-            // same install id appear). Don't add a peer for ourselves.
-            runCatching { gatt.disconnect() }
-            return
-        }
-        if (rejectedDevices.contains(deviceId)) {
-            rejectedAddresses.add(address)
-            runCatching { gatt.disconnect() }
-            return
-        }
-        deviceIdByAddress[address] = deviceId
-        markSeen(deviceId)
-        drainPendingInboundChats(address, deviceId)
-        scope.launch {
-            val result = Services.embedder.match(decoded.embeddings)
-            Log.d(TAG, "embedding read addr=$address device=$deviceId best=${result.bestSimilarity} forced=${forceMatchedAddresses.contains(address)}")
-            mergePeer(deviceId, address, result.bestSimilarity)
-            if (forceMatchedAddresses.contains(address)) {
-                state.updatePeer(deviceId) { it.copy(matched = true) }
-                drainPendingTexts(address)
-                return@launch
-            }
-            if (result.matched) {
-                val ch = gatt.getService(Protocol.SERVICE_UUID)?.getCharacteristic(Protocol.PROMPTS_CHAR_UUID)
-                if (ch != null) gatt.readCharacteristic(ch)
-            } else {
-                // Cache as no-match so we don't keep reconnecting to the same rotating address. Disconnect
-                // to free the slot for new peers; we'll re-handshake when the address rotates or the TTL expires.
-                noMatchUntilMs[address] = System.currentTimeMillis() + NO_MATCH_TTL_MS
+    private fun handleInterestsRead(gatt: BluetoothGatt, address: String, data: ByteArray) {
+        val decoded = InterestsPayload.decode(data)
+        when (val decode = coordinator.onInterestsDecoded(address, decoded)) {
+            PeerCoordinator.InterestsDecodeDecision.DropDecodeFailed -> {
+                Log.w(TAG, "interests decode failed from=$address")
                 runCatching { gatt.disconnect() }
             }
-        }
-    }
-
-    private fun handlePromptsRead(deviceId: String, address: String, data: ByteArray) {
-        val peerPrompts = PromptsPayload.decode(data)
-        if (peerPrompts.isEmpty()) return
-        scope.launch {
-            val result = Services.llm.match(peerPrompts)
-            if (!result.matched) return@launch
-            state.updatePeer(deviceId) { it.copy(matched = true) }
-            drainPendingTexts(address)
-            if (state.markMatchSeen(deviceId)) {
-                val label = state.peers.value[deviceId]?.label ?: labelFor(address)
-                BleScanService.notifyMatch(context, deviceId, label, result.peerPrompt)
+            PeerCoordinator.InterestsDecodeDecision.DropLoopback,
+            PeerCoordinator.InterestsDecodeDecision.DropRejected -> {
+                runCatching { gatt.disconnect() }
+            }
+            is PeerCoordinator.InterestsDecodeDecision.ForceMatched -> {
+                for (t in decode.pendingOutboundTexts) enqueueChatFrames(address, t)
+                pumpSend(address)
+            }
+            is PeerCoordinator.InterestsDecodeDecision.Registered -> {
+                val deviceId = decode.deviceId
+                val peerInterests = decode.interests
+                scope.launch {
+                    val match = Services.llm.match(peerInterests)
+                    Log.d(TAG, "interests read addr=$address device=$deviceId matched=${match.matched}")
+                    when (val d = coordinator.onInterestsMatched(deviceId, address, match)) {
+                        PeerCoordinator.InterestsMatchDecision.NotMatched ->
+                            runCatching { gatt.disconnect() }
+                        is PeerCoordinator.InterestsMatchDecision.Matched -> {
+                            for (t in d.pendingOutboundTexts) enqueueChatFrames(address, t)
+                            pumpSend(address)
+                            if (d.notifyLabel != null) {
+                                BleScanService.notifyMatch(context, deviceId, d.notifyLabel, d.peerInterest)
+                            }
+                        }
+                    }
+                }
             }
         }
-    }
-
-    /** Add [address] to the peer for [deviceId], creating the peer if needed, and update similarity. */
-    private fun mergePeer(deviceId: String, address: String, similarity: Float) {
-        markSeen(deviceId)
-        val existing = state.peers.value[deviceId]
-        if (existing == null) {
-            state.upsertPeer(
-                Peer(
-                    deviceId = deviceId,
-                    addresses = setOf(address),
-                    label = labelFor(address),
-                    similarity = similarity,
-                    matched = false,
-                ),
-            )
-        } else {
-            state.upsertPeer(
-                existing.copy(
-                    addresses = existing.addresses + address,
-                    similarity = maxOf(existing.similarity, similarity),
-                ),
-            )
-        }
-    }
-
-    private fun markSeen(deviceId: String) {
-        lastSeenByDeviceId[deviceId] = System.currentTimeMillis()
     }
 
     private suspend fun runLivenessLoop() {
         while (running) {
             delay(LIVENESS_CHECK_INTERVAL_MS)
             if (!running) break
-            pruneStalePeers()
-        }
-    }
-
-    /**
-     * Drop peers we haven't observed in a while. We rely on scan callbacks, GATT events, and
-     * inbound chat to refresh [lastSeenByDeviceId]; a peer that's gone silent across all three
-     * is almost certainly out of range or powered off, so we evict it from the nearby list. We
-     * use a longer grace window once the user has actually sent the peer a message — we don't
-     * want a brief BLE blip to nuke a real conversation.
-     */
-    private fun pruneStalePeers() {
-        val now = System.currentTimeMillis()
-        val peers = state.peers.value
-        val chats = state.chats.value
-        for ((deviceId, peer) in peers) {
-            val seen = lastSeenByDeviceId[deviceId] ?: now.also { lastSeenByDeviceId[deviceId] = it }
-            val idle = now - seen
-            val haveMyMsgs = chats[deviceId]?.any { it.sender == ChatSender.Me } == true
-            val limit = if (haveMyMsgs) STALE_WITH_MESSAGES_MS else STALE_NO_MESSAGES_MS
-            if (idle <= limit) continue
-            Log.d(TAG, "pruning stale peer=$deviceId idleMs=$idle haveMyMsgs=$haveMyMsgs")
-            for (addr in peer.addresses) {
-                clients[addr]?.let { runCatching { it.disconnect() } }
-            }
-            lastSeenByDeviceId.remove(deviceId)
-            state.removePeer(deviceId)
-        }
-    }
-
-    /** Called on disconnect: drop the address from its peer; remove the peer if that was its last. */
-    private fun forgetAddress(address: String) {
-        val deviceId = deviceIdByAddress.remove(address) ?: return
-        val peer = state.peers.value[deviceId] ?: return
-        val remaining = peer.addresses - address
-        if (remaining.isEmpty()) {
-            lastSeenByDeviceId.remove(deviceId)
-            state.removePeer(deviceId)
-        } else {
-            state.updatePeer(deviceId) { it.copy(addresses = remaining) }
+            val toDisconnect = coordinator.pruneStale()
+            for (addr in toDisconnect) clients[addr]?.let { runCatching { it.disconnect() } }
         }
     }
 }

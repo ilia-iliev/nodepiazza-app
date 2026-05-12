@@ -20,6 +20,9 @@ internal class BleAdvertiser(private val adapter: BluetoothAdapter?) {
     private var advertising = false
 
     private val callback = object : AdvertiseCallback() {
+        override fun onStartSuccess(settingsInEffect: android.bluetooth.le.AdvertiseSettings?) {
+            Log.d(TAG, "advertise started: $settingsInEffect")
+        }
         override fun onStartFailure(errorCode: Int) {
             Log.w(TAG, "advertise start failure: $errorCode")
             advertising = false

@@ -13,7 +13,7 @@ import java.io.File
 import java.util.UUID
 
 @Serializable
-data class Prompt(val id: String, val text: String)
+data class Interest(val id: String, val text: String)
 
 /**
  * One match-eligible peer, identified by a stable [deviceId] that persists across BLE address
@@ -24,7 +24,6 @@ data class Peer(
     val deviceId: String,
     val addresses: Set<String>,
     val label: String,
-    val similarity: Float,
     val matched: Boolean,
 )
 
@@ -36,9 +35,16 @@ data class ChatMessage(
     val timestampMs: Long = System.currentTimeMillis(),
 )
 
+/**
+ * Persistent user state: the interests the user has authored, the BLE on/off preference, and a
+ * stable per-install device id. Peer/chat state lives in [com.nodepiazza.phase3.ble.PeerCoordinator]
+ * instead — those are volatile and tied to the BLE session.
+ */
 class AppState private constructor(context: Context) {
 
-    private val file: File = File(context.filesDir, "prompts.json")
+    private val file: File = File(context.filesDir, "interests.json")
+    private val legacyFile: File = File(context.filesDir, "prompts.json")
+    private val aboutFile: File = File(context.filesDir, "about_me.txt")
     private val json = Json { ignoreUnknownKeys = true }
     private val prefs = context.getSharedPreferences("nodepiazza", Context.MODE_PRIVATE)
 
@@ -50,34 +56,37 @@ class AppState private constructor(context: Context) {
         fresh
     }
 
-    private val _prompts = MutableStateFlow<List<Prompt>>(loadPrompts())
-    val prompts: StateFlow<List<Prompt>> = _prompts.asStateFlow()
+    private val _interests = MutableStateFlow<List<Interest>>(loadInterests())
+    val interests: StateFlow<List<Interest>> = _interests.asStateFlow()
 
     private val _bleEnabled = MutableStateFlow(prefs.getBoolean(KEY_BLE_ENABLED, true))
     val bleEnabled: StateFlow<Boolean> = _bleEnabled.asStateFlow()
 
-    private val _peers = MutableStateFlow<Map<String, Peer>>(emptyMap())
-    val peers: StateFlow<Map<String, Peer>> = _peers.asStateFlow()
+    private val _aboutMe = MutableStateFlow(loadAbout())
+    val aboutMe: StateFlow<String> = _aboutMe.asStateFlow()
 
-    private val _activeChatDeviceId = MutableStateFlow<String?>(null)
-    val activeChatDeviceId: StateFlow<String?> = _activeChatDeviceId.asStateFlow()
-
-    private val _chats = MutableStateFlow<Map<String, List<ChatMessage>>>(emptyMap())
-    val chats: StateFlow<Map<String, List<ChatMessage>>> = _chats.asStateFlow()
-
-    private val seenMatches: MutableSet<String> =
-        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
-
-    fun addPrompt(text: String) {
+    fun addInterest(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
-        _prompts.update { it + Prompt(id = UUID.randomUUID().toString(), text = trimmed) }
-        persistPrompts()
+        _interests.update { it + Interest(id = UUID.randomUUID().toString(), text = trimmed) }
+        persistInterests()
     }
 
-    fun removePrompt(id: String) {
-        _prompts.update { list -> list.filterNot { it.id == id } }
-        persistPrompts()
+    fun removeInterest(id: String) {
+        _interests.update { list -> list.filterNot { it.id == id } }
+        persistInterests()
+    }
+
+    fun updateInterest(id: String, text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) {
+            removeInterest(id)
+            return
+        }
+        _interests.update { list ->
+            list.map { if (it.id == id) it.copy(text = trimmed) else it }
+        }
+        persistInterests()
     }
 
     fun setBleEnabled(enabled: Boolean) {
@@ -86,54 +95,35 @@ class AppState private constructor(context: Context) {
         prefs.edit().putBoolean(KEY_BLE_ENABLED, enabled).apply()
     }
 
-    fun myEmbeddings(): List<ByteArray> = _prompts.value.map { embed(it.text).toInt8Bytes() }
-
-    fun myPromptTexts(): List<String> = _prompts.value.map { it.text }
-
-    fun upsertPeer(peer: Peer) {
-        _peers.update { it + (peer.deviceId to peer) }
+    fun setAboutMe(text: String) {
+        if (_aboutMe.value == text) return
+        _aboutMe.value = text
+        persistAbout()
     }
 
-    fun updatePeer(deviceId: String, transform: (Peer) -> Peer) {
-        _peers.update { current ->
-            val existing = current[deviceId] ?: return@update current
-            current + (deviceId to transform(existing))
+    fun myInterestTexts(): List<String> = _interests.value.map { it.text }
+
+    private fun loadInterests(): List<Interest> {
+        val source = when {
+            file.exists() -> file
+            legacyFile.exists() -> legacyFile
+            else -> return emptyList()
         }
-    }
-
-    fun removePeer(deviceId: String) {
-        _peers.update { it - deviceId }
-        _chats.update { it - deviceId }
-        if (_activeChatDeviceId.value == deviceId) _activeChatDeviceId.value = null
-    }
-
-    fun openChat(deviceId: String) {
-        _activeChatDeviceId.value = deviceId
-    }
-
-    fun closeChat() {
-        _activeChatDeviceId.value = null
-    }
-
-    fun appendChat(deviceId: String, message: ChatMessage) {
-        _chats.update { current ->
-            val existing = current[deviceId].orEmpty()
-            current + (deviceId to (existing + message))
-        }
-    }
-
-    /** First-time-seen check for matches in this process. Returns true the first time. */
-    fun markMatchSeen(deviceId: String): Boolean = seenMatches.add(deviceId)
-
-    private fun loadPrompts(): List<Prompt> {
-        if (!file.exists()) return emptyList()
-        val text = file.readText()
+        val text = source.readText()
         if (text.isBlank()) return emptyList()
-        return runCatching { json.decodeFromString<List<Prompt>>(text) }.getOrDefault(emptyList())
+        return runCatching { json.decodeFromString<List<Interest>>(text) }.getOrDefault(emptyList())
     }
 
-    private fun persistPrompts() {
-        file.writeText(json.encodeToString(ListSerializer(Prompt.serializer()), _prompts.value))
+    private fun persistInterests() {
+        file.writeText(json.encodeToString(ListSerializer(Interest.serializer()), _interests.value))
+        if (legacyFile.exists()) legacyFile.delete()
+    }
+
+    private fun loadAbout(): String =
+        if (aboutFile.exists()) aboutFile.readText() else ""
+
+    private fun persistAbout() {
+        aboutFile.writeText(_aboutMe.value)
     }
 
     companion object {

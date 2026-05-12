@@ -23,6 +23,7 @@ import com.nodepiazza.phase3.AppState
 import com.nodepiazza.phase3.Services
 import com.nodepiazza.phase3.ble.BleCore
 import com.nodepiazza.phase3.ble.BleScanService
+import com.nodepiazza.phase3.ble.PeerCoordinator
 
 class MainActivity : ComponentActivity() {
 
@@ -38,7 +39,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = NodepiazzaLightColors) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    RootScreen(appState, Services.ble)
+                    RootScreen(appState, Services.coordinator, Services.ble)
                 }
             }
         }
@@ -52,7 +53,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleOpenChatIntent(intent: Intent?) {
         val deviceId = intent?.getStringExtra(EXTRA_OPEN_CHAT_DEVICE_ID) ?: return
-        appState.openChat(deviceId)
+        Services.coordinator.openChat(deviceId)
     }
 
     companion object {
@@ -61,7 +62,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun RootScreen(state: AppState, ble: BleCore) {
+fun RootScreen(state: AppState, coordinator: PeerCoordinator, ble: BleCore) {
     val ctx = LocalContext.current
     var granted by remember { mutableStateOf(hasAllPermissions(ctx)) }
     val bleEnabled by state.bleEnabled.collectAsStateWithLifecycle()
@@ -89,10 +90,10 @@ fun RootScreen(state: AppState, ble: BleCore) {
         return
     }
 
-    val activeChat by state.activeChatDeviceId.collectAsStateWithLifecycle()
+    val activeChat by coordinator.activeChatDeviceId.collectAsStateWithLifecycle()
     if (activeChat != null) {
-        ChatScreen(state, ble, activeChat!!)
+        ChatScreen(coordinator, ble, activeChat!!)
     } else {
-        MainScreen(state)
+        MainScreen(state, coordinator)
     }
 }
