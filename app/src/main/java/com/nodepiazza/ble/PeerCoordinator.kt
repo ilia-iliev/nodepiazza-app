@@ -24,7 +24,6 @@ import kotlinx.coroutines.flow.update
 class PeerCoordinator(
     val myDeviceId: String,
     private val clock: () -> Long = System::currentTimeMillis,
-    private val noMatchTtlMs: Long = DEFAULT_NO_MATCH_TTL_MS,
     private val staleNoMessagesMs: Long = DEFAULT_STALE_NO_MESSAGES_MS,
     private val staleWithMessagesMs: Long = DEFAULT_STALE_WITH_MESSAGES_MS,
 ) {
@@ -39,7 +38,6 @@ class PeerCoordinator(
     val activeChatDeviceId: StateFlow<String?> = _activeChatDeviceId.asStateFlow()
 
     private val seenMatches: MutableSet<String> = ConcurrentHashMap.newKeySet()
-    private val noMatchUntilMs = ConcurrentHashMap<String, Long>()
     private val rejectedDevices: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val rejectedAddresses: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val forceMatchedAddresses: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -98,11 +96,6 @@ class PeerCoordinator(
         if (clientAddresses.contains(address)) return ScanDecision.Skip
         if (rejectedAddresses.contains(address)) return ScanDecision.Skip
         if (knownDeviceId != null && rejectedDevices.contains(knownDeviceId)) return ScanDecision.Skip
-        val until = noMatchUntilMs[address]
-        if (until != null) {
-            if (until > clock()) return ScanDecision.Skip
-            noMatchUntilMs.remove(address)
-        }
         return ScanDecision.Connect
     }
 
@@ -166,10 +159,9 @@ class PeerCoordinator(
         match: LlmMatch,
     ): InterestsMatchDecision {
         if (!match.matched) {
-            noMatchUntilMs[address] = clock() + noMatchTtlMs
             return InterestsMatchDecision.NotMatched
         }
-        updatePeerEntry(deviceId) { it.copy(matched = true) }
+        updatePeerEntry(deviceId) { it.copy(matched = true, matchReason = match.peerInterest) }
         val drained = drainPendingTexts(address)
         val firstTime = seenMatches.add(deviceId)
         val label = if (firstTime) (_peers.value[deviceId]?.label ?: labelFor(address)) else null
@@ -227,7 +219,6 @@ class PeerCoordinator(
     /** Mark [address] as force-matched so the interests gate doesn't disconnect us. */
     fun markForceMatched(address: String) {
         forceMatchedAddresses.add(address)
-        noMatchUntilMs.remove(address)
     }
 
     // ---------- Reject ----------
@@ -276,7 +267,6 @@ class PeerCoordinator(
     fun resetOnBleStop() {
         rejectedDevices.clear()
         rejectedAddresses.clear()
-        noMatchUntilMs.clear()
         forceMatchedAddresses.clear()
         deviceIdByAddress.clear()
         pendingTexts.clear()
@@ -364,7 +354,6 @@ class PeerCoordinator(
     }
 
     companion object {
-        const val DEFAULT_NO_MATCH_TTL_MS = 10 * 60 * 1000L
         const val DEFAULT_STALE_NO_MESSAGES_MS = 2 * 60 * 1000L
         const val DEFAULT_STALE_WITH_MESSAGES_MS = 30 * 60 * 1000L
     }

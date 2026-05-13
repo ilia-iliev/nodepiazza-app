@@ -45,16 +45,15 @@ class PeerCoordinatorTest {
     }
 
     @Test
-    fun scan_skipsRejectedAddress_butReconnectsAfterTtlExpires() {
+    fun scan_allowsReconnectAfterNoMatchOnceClientCloses() {
         val c = newCoord()
         c.onClientOpened(addrA)
         c.onInterestsDecoded(addrA, decoded(peerDeviceId))
         c.onInterestsMatched(peerDeviceId, addrA, noMatch())
-        // No-match TTL is now armed for addrA.
+        // While the client is still open, scans skip on the clientAddresses gate.
         assertEquals(PeerCoordinator.ScanDecision.Skip, c.onScanResult(addrA))
-        clock.addAndGet(PeerCoordinator.DEFAULT_NO_MATCH_TTL_MS + 1)
-        // Pretend the gatt disconnected so we're not blocked by clientAddresses.
         c.onDisconnected(addrA)
+        // No per-address no-match TTL anymore: dedupe is handled by the content-keyed LLM cache.
         assertEquals(PeerCoordinator.ScanDecision.Connect, c.onScanResult(addrA))
     }
 
@@ -181,20 +180,6 @@ class PeerCoordinatorTest {
         assertTrue(r is PeerCoordinator.InterestsDecodeDecision.ForceMatched)
         assertEquals(peerDeviceId, (r as PeerCoordinator.InterestsDecodeDecision.ForceMatched).deviceId)
         assertTrue(c.peers.value[peerDeviceId]!!.matched)
-    }
-
-    @Test
-    fun forceMatched_clearsNoMatchTtl() {
-        val c = newCoord()
-        c.onClientOpened(addrA)
-        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
-        c.onInterestsMatched(peerDeviceId, addrA, noMatch()) // arms no-match TTL on addrA
-        assertEquals(PeerCoordinator.ScanDecision.Skip, c.onScanResult(addrA))
-        c.onDisconnected(addrA)
-        // BleCore force-matches the address (e.g. for an inbound chat) before reconnecting.
-        c.markForceMatched(addrA)
-        // The TTL is now cleared, so the next scan is allowed to reconnect.
-        assertEquals(PeerCoordinator.ScanDecision.Connect, c.onScanResult(addrA))
     }
 
     // ---------- Asymmetric chat ----------
@@ -339,15 +324,13 @@ class PeerCoordinatorTest {
     }
 
     @Test
-    fun interestsMatched_notMatched_armsTtlAndReturnsNotMatched() {
+    fun interestsMatched_notMatched_returnsNotMatchedWithoutMutatingPeer() {
         val c = newCoord()
         c.onClientOpened(addrA)
         c.onInterestsDecoded(addrA, decoded(peerDeviceId))
         val r = c.onInterestsMatched(peerDeviceId, addrA, noMatch())
         assertSame(PeerCoordinator.InterestsMatchDecision.NotMatched, r)
         assertFalse(c.peers.value[peerDeviceId]!!.matched)
-        // TTL armed.
-        assertEquals(PeerCoordinator.ScanDecision.Skip, c.onScanResult(addrA))
     }
 
     // ---------- Reset ----------
