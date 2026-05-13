@@ -21,11 +21,13 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.contentDescription
@@ -45,7 +47,9 @@ fun MainScreen(state: AppState, coordinator: PeerCoordinator) {
     val aboutMe by state.aboutMe.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
 
+    AppBackground {
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 title = { Text("nodepiazza") },
@@ -63,6 +67,7 @@ fun MainScreen(state: AppState, coordinator: PeerCoordinator) {
                         )
                     }
                 },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
             )
         },
     ) { padding ->
@@ -83,6 +88,7 @@ fun MainScreen(state: AppState, coordinator: PeerCoordinator) {
             val contentUsed = (budget.wouldUseBytes - InterestsPayload.HEADER_BYTES)
                 .coerceAtLeast(0)
             val percent = if (contentMax > 0) (contentUsed * 100) / contentMax else 0
+            ModelStatusBanner()
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -108,6 +114,7 @@ fun MainScreen(state: AppState, coordinator: PeerCoordinator) {
                 item { AboutMeSection(value = aboutMe, onChange = state::setAboutMe) }
 
                 item { Spacer(Modifier.height(20.dp)) }
+                item { SectionLabel("Nearby peers") }
                 if (matched.isEmpty()) {
                     item { ScanStatusHint(scanning = bleEnabled) }
                 }
@@ -124,5 +131,6 @@ fun MainScreen(state: AppState, coordinator: PeerCoordinator) {
                 }
             }
         }
+    }
     }
 }

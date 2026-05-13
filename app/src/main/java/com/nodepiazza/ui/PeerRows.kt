@@ -88,7 +88,8 @@ internal fun MatchedPeerRow(peer: Peer, onOpen: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(peer.label, fontWeight = FontWeight.Medium)
+                val heading = peer.matchReason?.takeIf { it.isNotBlank() } ?: peer.label
+                Text(heading, fontWeight = FontWeight.Medium)
                 Text(
                     "tap to chat",
                     style = MaterialTheme.typography.bodySmall,
