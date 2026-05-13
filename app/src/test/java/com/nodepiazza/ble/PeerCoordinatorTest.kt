@@ -288,6 +288,70 @@ class PeerCoordinatorTest {
     }
 
     @Test
+    fun prune_skipsActiveChatEvenWhenStale() {
+        val c = newCoord()
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        c.onInterestsMatched(peerDeviceId, addrA, matched())
+        c.openChat(peerDeviceId)
+        clock.addAndGet(PeerCoordinator.DEFAULT_STALE_NO_MESSAGES_MS + 60_000L)
+        assertTrue(c.pruneStale().isEmpty())
+        assertNotNull(c.peers.value[peerDeviceId])
+    }
+
+    @Test
+    fun disconnect_keepsActiveChatPeer_andEmptiesAddresses() {
+        val c = newCoord()
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        c.onInterestsMatched(peerDeviceId, addrA, matched())
+        c.openChat(peerDeviceId)
+        c.onDisconnected(addrA)
+        val peer = c.peers.value[peerDeviceId]
+        assertNotNull(peer)
+        assertTrue(peer!!.addresses.isEmpty())
+        assertFalse(peer.connected)
+    }
+
+    @Test
+    fun closeChat_dropsPeerWhenOutOfRange() {
+        val c = newCoord()
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        c.onInterestsMatched(peerDeviceId, addrA, matched())
+        c.openChat(peerDeviceId)
+        c.onDisconnected(addrA)
+        assertNotNull(c.peers.value[peerDeviceId])
+        c.closeChat()
+        assertNull(c.peers.value[peerDeviceId])
+    }
+
+    @Test
+    fun closeChat_keepsPeerWhenStillReachable() {
+        val c = newCoord()
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        c.onInterestsMatched(peerDeviceId, addrA, matched())
+        c.openChat(peerDeviceId)
+        c.closeChat()
+        assertNotNull(c.peers.value[peerDeviceId])
+    }
+
+    @Test
+    fun peerLiveness_reflectsConnectedAndLastSeen() {
+        val c = newCoord()
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        c.onInterestsMatched(peerDeviceId, addrA, matched())
+        val live = c.peers.value[peerDeviceId]!!
+        assertTrue(live.connected)
+        assertEquals(clock.get(), live.lastSeenMs)
+        c.onDisconnected(addrA)
+        // Not active chat → peer is pruned.
+        assertNull(c.peers.value[peerDeviceId])
+    }
+
+    @Test
     fun prune_keepsPeerWithMyMessagesUntilLongerWindow() {
         val c = newCoord()
         c.onClientOpened(addrA)

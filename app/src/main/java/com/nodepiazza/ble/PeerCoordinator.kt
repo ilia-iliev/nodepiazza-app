@@ -51,13 +51,27 @@ class PeerCoordinator(
 
     fun openChat(deviceId: String) { _activeChatDeviceId.value = deviceId }
 
-    fun closeChat() { _activeChatDeviceId.value = null }
+    /**
+     * Close the active chat. If the closing peer is out of range (no addresses left), drop it
+     * now — we kept it around in [onDisconnected] only because the chat was open.
+     */
+    fun closeChat() {
+        val id = _activeChatDeviceId.value
+        _activeChatDeviceId.value = null
+        if (id != null && _peers.value[id]?.addresses?.isEmpty() == true) {
+            lastSeenByDeviceId.remove(id)
+            removePeerEntry(id)
+        }
+    }
 
     // ---------- Connection bookkeeping ----------
 
     /** BleCore opened an outbound GATT to [address] (whether or not it has connected yet). */
     fun onClientOpened(address: String) {
         clientAddresses.add(address)
+        deviceIdByAddress[address]?.let { id ->
+            updatePeerEntry(id) { withLiveness(it, id) }
+        }
     }
 
     /** BleCore observed a GATT disconnect for [address]. */
@@ -66,11 +80,21 @@ class PeerCoordinator(
         val deviceId = deviceIdByAddress.remove(address) ?: return
         val peer = _peers.value[deviceId] ?: return
         val remaining = peer.addresses - address
-        if (remaining.isEmpty()) {
-            lastSeenByDeviceId.remove(deviceId)
-            removePeerEntry(deviceId)
-        } else {
-            _peers.update { it + (deviceId to peer.copy(addresses = remaining)) }
+        when {
+            remaining.isNotEmpty() ->
+                _peers.update {
+                    it + (deviceId to withLiveness(peer.copy(addresses = remaining), deviceId))
+                }
+            // Active chat keeps its entry around so the chat doesn't vanish; the UI shows the
+            // out-of-range state from peer.addresses.isEmpty() / connected = false.
+            deviceId == _activeChatDeviceId.value ->
+                _peers.update {
+                    it + (deviceId to withLiveness(peer.copy(addresses = emptySet()), deviceId))
+                }
+            else -> {
+                lastSeenByDeviceId.remove(deviceId)
+                removePeerEntry(deviceId)
+            }
         }
     }
 
@@ -242,13 +266,19 @@ class PeerCoordinator(
 
     // ---------- Liveness / pruning ----------
 
-    /** Drop peers we haven't heard from in too long. Returns addresses to disconnect. */
+    /**
+     * Drop peers we haven't heard from in too long. Returns addresses to disconnect. The active
+     * chat's peer is never pruned so the user can see its out-of-range banner instead of having
+     * the chat vanish underneath them.
+     */
     fun pruneStale(): Set<String> {
         val now = clock()
         val toDisconnect = mutableSetOf<String>()
         val peers = _peers.value
         val chats = _chats.value
+        val active = _activeChatDeviceId.value
         for ((deviceId, peer) in peers) {
+            if (deviceId == active) continue
             val seen = lastSeenByDeviceId[deviceId] ?: now.also { lastSeenByDeviceId[deviceId] = it }
             val idle = now - seen
             val haveMyMsgs = chats[deviceId]?.any { it.sender == ChatSender.Me } == true
@@ -283,7 +313,7 @@ class PeerCoordinator(
             val existing = current[deviceId]
             val peer = existing?.copy(addresses = existing.addresses + address)
                 ?: newUnmatchedPeer(deviceId, address)
-            current + (deviceId to peer)
+            current + (deviceId to withLiveness(peer, deviceId))
         }
     }
 
@@ -292,9 +322,11 @@ class PeerCoordinator(
         appendChat(deviceId, ChatMessage(ChatSender.Them, text))
         val existing = _peers.value[deviceId]
         if (existing == null) {
-            _peers.update { it + (deviceId to newMatchedPeer(deviceId, address)) }
+            _peers.update {
+                it + (deviceId to withLiveness(newMatchedPeer(deviceId, address), deviceId))
+            }
         } else if (!existing.matched) {
-            updatePeerEntry(deviceId) { it.copy(matched = true) }
+            updatePeerEntry(deviceId) { withLiveness(it.copy(matched = true), deviceId) }
         }
     }
 
@@ -311,6 +343,17 @@ class PeerCoordinator(
         label = labelFor(address),
         matched = true,
     )
+
+    /** Recompute [Peer.connected] and [Peer.lastSeenMs] from current connection state. */
+    private fun withLiveness(peer: Peer, deviceId: String): Peer {
+        val isConnected = peer.addresses.any { clientAddresses.contains(it) }
+        val seen = lastSeenByDeviceId[deviceId] ?: peer.lastSeenMs
+        return if (peer.connected == isConnected && peer.lastSeenMs == seen) {
+            peer
+        } else {
+            peer.copy(connected = isConnected, lastSeenMs = seen)
+        }
+    }
 
     private fun drainPendingTexts(address: String): List<String> =
         drainQueue(pendingTexts[address])
@@ -351,6 +394,8 @@ class PeerCoordinator(
 
     private fun markSeen(deviceId: String) {
         lastSeenByDeviceId[deviceId] = clock()
+        // Republish liveness so subscribers (chat header, peer list) see the refreshed timestamp.
+        updatePeerEntry(deviceId) { withLiveness(it, deviceId) }
     }
 
     companion object {
