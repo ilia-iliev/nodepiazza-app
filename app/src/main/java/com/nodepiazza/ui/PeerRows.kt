@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.nodepiazza.Peer
@@ -82,31 +83,25 @@ internal fun ScanStatusHint(scanning: Boolean) {
 }
 
 @Composable
-internal fun MatchedPeerRow(peer: Peer, onOpen: () -> Unit) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-        onClick = onOpen,
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(peer.displayTitle, fontWeight = FontWeight.Medium)
-                Text(
-                    "tap to chat",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
+internal fun MatchedPeerRow(peer: Peer, onOpen: () -> Unit) =
+    PeerRow(
+        title = peer.displayTitle,
+        containerColor = MaterialTheme.colorScheme.primaryContainer,
+        onOpen = onOpen,
+    )
 
 @Composable
-internal fun OtherPeerRow(peer: Peer, onOpen: () -> Unit) {
+internal fun OtherPeerRow(peer: Peer, onOpen: () -> Unit) =
+    PeerRow(
+        title = peer.label,
+        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        onOpen = onOpen,
+    )
+
+@Composable
+private fun PeerRow(title: String, containerColor: Color, onOpen: () -> Unit) {
     Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
         onClick = onOpen,
     ) {
         Row(
@@ -114,7 +109,7 @@ internal fun OtherPeerRow(peer: Peer, onOpen: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(peer.label, fontWeight = FontWeight.Medium)
+                Text(title, fontWeight = FontWeight.Medium)
                 Text(
                     "tap to chat",
                     style = MaterialTheme.typography.bodySmall,

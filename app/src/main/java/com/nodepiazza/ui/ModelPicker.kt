@@ -22,7 +22,6 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -191,12 +190,7 @@ private fun ModelRow(
         }
         if (state is ModelDownloadState.Running) {
             Spacer(Modifier.height(6.dp))
-            val pct = if (state.total > 0) state.bytes.toFloat() / state.total else null
-            if (pct != null) {
-                LinearProgressIndicator(progress = { pct }, modifier = Modifier.fillMaxWidth())
-            } else {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            }
+            DownloadProgressBar(state, Modifier.fillMaxWidth())
         }
     }
 }
@@ -204,9 +198,7 @@ private fun ModelRow(
 private fun statusLine(spec: ModelSpec, installed: Boolean, state: ModelDownloadState): String =
     when {
         installed -> "Installed • ${formatSize(spec.approxBytes)}"
-        state is ModelDownloadState.Running ->
-            if (state.total > 0) "${formatSize(state.bytes)} / ${formatSize(state.total)}"
-            else "Starting…"
+        state is ModelDownloadState.Running -> runningSizeLabel(state)
         state is ModelDownloadState.WaitingForNetwork -> "Waiting for Wi-Fi"
         state is ModelDownloadState.OutOfSpace -> "Not enough space"
         state is ModelDownloadState.Failed -> "Download failed"

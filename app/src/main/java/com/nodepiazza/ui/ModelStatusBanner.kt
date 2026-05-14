@@ -87,16 +87,10 @@ private fun ActiveContent(spec: ModelSpec, state: ModelDownloadState) {
     Spacer(Modifier.height(6.dp))
     when (state) {
         is ModelDownloadState.Running -> {
-            val pct = if (state.total > 0) state.bytes.toFloat() / state.total else null
-            if (pct != null) {
-                LinearProgressIndicator(progress = { pct }, modifier = Modifier.fillMaxWidth())
-            } else {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            }
+            DownloadProgressBar(state, Modifier.fillMaxWidth())
             Spacer(Modifier.height(4.dp))
             Text(
-                if (state.total > 0) "${formatSize(state.bytes)} / ${formatSize(state.total)}"
-                else "Starting…",
+                runningSizeLabel(state),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

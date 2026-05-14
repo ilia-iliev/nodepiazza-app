@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -12,9 +13,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.nodepiazza.Services
 import com.nodepiazza.mlmodels.ModelBootstrap
+import com.nodepiazza.mlmodels.ModelCatalog
+import com.nodepiazza.mlmodels.ModelDownloadState
 import com.nodepiazza.mlmodels.ModelSpec
 import java.io.File
 
@@ -39,7 +43,7 @@ private fun planDownload(context: Context, spec: ModelSpec): DownloadPlan {
     val folder = Services.modelsFolder
     val needed = spec.approxBytes
     val free = folder.usableSpaceOrZero()
-    if (free < needed + SPACE_SAFETY_MARGIN) {
+    if (free < needed + ModelCatalog.SPACE_SAFETY_MARGIN) {
         return DownloadPlan.NotEnoughSpace(free = free, needed = needed)
     }
     return if (isUnmetered(context)) DownloadPlan.EnqueueNow else DownloadPlan.NeedsCellularConsent
@@ -66,10 +70,22 @@ fun formatSize(bytes: Long): String {
     }
 }
 
+/** Progress bar for a running download — determinate once the total size is known. */
+@Composable
+internal fun DownloadProgressBar(state: ModelDownloadState.Running, modifier: Modifier = Modifier) {
+    if (state.total > 0) {
+        LinearProgressIndicator(progress = { state.bytes.toFloat() / state.total }, modifier = modifier)
+    } else {
+        LinearProgressIndicator(modifier = modifier)
+    }
+}
+
+/** "<downloaded> / <total>" once the total is known, otherwise a "starting" placeholder. */
+internal fun runningSizeLabel(state: ModelDownloadState.Running): String =
+    if (state.total > 0) "${formatSize(state.bytes)} / ${formatSize(state.total)}" else "Starting…"
+
 private fun File.usableSpaceOrZero(): Long =
     runCatching { mkdirs(); usableSpace }.getOrDefault(0L)
-
-private const val SPACE_SAFETY_MARGIN = 64L * 1024 * 1024
 
 /**
  * Hosts the cellular-consent and not-enough-space dialogs and returns the lambda that kicks off a

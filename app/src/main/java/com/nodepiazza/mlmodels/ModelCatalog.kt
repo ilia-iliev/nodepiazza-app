@@ -36,5 +36,8 @@ object ModelCatalog {
 
     val ALL: List<ModelSpec> = listOf(E2B, E4B)
 
+    /** Free space kept in reserve on top of a download's size so the device isn't left at 0 B. */
+    const val SPACE_SAFETY_MARGIN = 64L * 1024 * 1024
+
     fun byFilename(filename: String?): ModelSpec? = ALL.firstOrNull { it.filename == filename }
 }

@@ -56,7 +56,8 @@ class ModelDownloadWorker(
 
             val parent = target.parentFile
             val remaining = totalLength - startOffset
-            if (parent != null && remaining > 0 && parent.usableSpace < remaining + SPACE_SAFETY_MARGIN) {
+            if (parent != null && remaining > 0 &&
+                parent.usableSpace < remaining + ModelCatalog.SPACE_SAFETY_MARGIN) {
                 partial.delete()
                 return@withContext outOfSpace()
             }
@@ -142,8 +143,6 @@ class ModelDownloadWorker(
         const val KEY_PROGRESS_TOTAL = "progress_total"
         const val KEY_FAILURE_REASON = "failure_reason"
         const val FAILURE_OUT_OF_SPACE = "out_of_space"
-        // Buffer reserved on top of remaining download bytes so the device isn't left at 0 B free.
-        private const val SPACE_SAFETY_MARGIN = 64L * 1024 * 1024
         private const val CHANNEL_ID = "model_download"
         private const val NOTIFICATION_ID = 0xCAFE
     }
