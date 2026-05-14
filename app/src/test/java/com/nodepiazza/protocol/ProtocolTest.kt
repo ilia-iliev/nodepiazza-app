@@ -1,8 +1,6 @@
-package com.nodepiazza
+package com.nodepiazza.protocol
 
 import com.nodepiazza.ble.labelFor
-import com.nodepiazza.protocol.InterestsPayload
-import com.nodepiazza.protocol.Protocol
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
