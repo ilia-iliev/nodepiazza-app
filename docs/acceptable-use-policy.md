@@ -2,7 +2,7 @@
 
 **App:** nodepiazza
 **Last updated:** 14 May 2026
-**Contact:** ilia.iliev94@gmail.com
+**Contact:** ilia.agentov@gmail.com
 
 nodepiazza connects people who are physically near each other and lets them
 chat. To keep that safe, everyone who uses the app agrees to these rules. You
