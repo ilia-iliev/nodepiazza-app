@@ -9,10 +9,12 @@ import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -52,23 +54,44 @@ class ModelDownloadWorker(
             if (!resumed && resumeFrom > 0) partial.delete()
             val totalLength = startOffset + connection.contentLengthLong
 
-            connection.inputStream.use { input ->
-                FileOutputStream(partial, resumed).use { output ->
-                    val buf = ByteArray(64 * 1024)
-                    var written = startOffset
-                    var lastReport = startOffset
-                    while (true) {
-                        if (isStopped) return@withContext Result.failure()
-                        val n = input.read(buf)
-                        if (n == -1) break
-                        output.write(buf, 0, n)
-                        written += n
-                        if (written - lastReport >= 1_000_000) {
-                            lastReport = written
-                            setForeground(makeForegroundInfo(written, totalLength))
+            val parent = target.parentFile
+            val remaining = totalLength - startOffset
+            if (parent != null && remaining > 0 && parent.usableSpace < remaining + SPACE_SAFETY_MARGIN) {
+                partial.delete()
+                return@withContext outOfSpace()
+            }
+
+            try {
+                connection.inputStream.use { input ->
+                    FileOutputStream(partial, resumed).use { output ->
+                        val buf = ByteArray(64 * 1024)
+                        var written = startOffset
+                        var lastReport = startOffset
+                        while (true) {
+                            if (isStopped) return@withContext Result.failure()
+                            val n = input.read(buf)
+                            if (n == -1) break
+                            output.write(buf, 0, n)
+                            written += n
+                            if (written - lastReport >= 1_000_000) {
+                                lastReport = written
+                                setForeground(makeForegroundInfo(written, totalLength))
+                                setProgress(
+                                    workDataOf(
+                                        KEY_PROGRESS_BYTES to written,
+                                        KEY_PROGRESS_TOTAL to totalLength,
+                                    )
+                                )
+                            }
                         }
                     }
                 }
+            } catch (e: IOException) {
+                if (e.isOutOfSpace()) {
+                    partial.delete()
+                    return@withContext outOfSpace()
+                }
+                throw e
             }
             if (!partial.renameTo(target)) Result.failure() else Result.success()
         } catch (e: Exception) {
@@ -103,9 +126,24 @@ class ModelDownloadWorker(
         }
     }
 
+    private fun outOfSpace(): Result =
+        Result.failure(workDataOf(KEY_FAILURE_REASON to FAILURE_OUT_OF_SPACE))
+
+    private fun IOException.isOutOfSpace(): Boolean {
+        val msg = message.orEmpty()
+        return msg.contains("ENOSPC", ignoreCase = true) ||
+            msg.contains("No space left", ignoreCase = true)
+    }
+
     companion object {
         const val KEY_URL = "url"
         const val KEY_TARGET = "target"
+        const val KEY_PROGRESS_BYTES = "progress_bytes"
+        const val KEY_PROGRESS_TOTAL = "progress_total"
+        const val KEY_FAILURE_REASON = "failure_reason"
+        const val FAILURE_OUT_OF_SPACE = "out_of_space"
+        // Buffer reserved on top of remaining download bytes so the device isn't left at 0 B free.
+        private const val SPACE_SAFETY_MARGIN = 64L * 1024 * 1024
         private const val CHANNEL_ID = "model_download"
         private const val NOTIFICATION_ID = 0xCAFE
     }
