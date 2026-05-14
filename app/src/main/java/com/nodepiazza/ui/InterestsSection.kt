@@ -53,19 +53,22 @@ internal fun InterestsHeader(percent: Int, overflow: Boolean) {
     ) {
         SectionLabel("Talk to me about")
         Spacer(Modifier.weight(1f))
-        // Gray below 70%; ramps to error red between 70% and 100%; stays red beyond.
-        val frac = ((percent - 70).coerceAtLeast(0) / 30f).coerceIn(0f, 1f)
-        val color = lerp(
-            MaterialTheme.colorScheme.onSurfaceVariant,
-            MaterialTheme.colorScheme.error,
-            frac,
-        )
-        Text(
-            text = "$percent%",
-            style = MaterialTheme.typography.labelMedium,
-            color = if (overflow) MaterialTheme.colorScheme.error else color,
-            fontWeight = if (overflow) FontWeight.SemiBold else FontWeight.Normal,
-        )
+        // Only surfaced once the budget is nearly full; ramps to error red between
+        // 80% and 100%, stays red beyond.
+        if (percent >= 80 || overflow) {
+            val frac = ((percent - 80).coerceAtLeast(0) / 20f).coerceIn(0f, 1f)
+            val color = lerp(
+                MaterialTheme.colorScheme.onSurfaceVariant,
+                MaterialTheme.colorScheme.error,
+                frac,
+            )
+            Text(
+                text = "$percent%",
+                style = MaterialTheme.typography.labelMedium,
+                color = if (overflow) MaterialTheme.colorScheme.error else color,
+                fontWeight = if (overflow) FontWeight.SemiBold else FontWeight.Normal,
+            )
+        }
     }
 }
 
