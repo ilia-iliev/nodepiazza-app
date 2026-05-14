@@ -2,7 +2,7 @@
 
 **App:** nodepiazza
 **Last updated:** 14 May 2026
-**Contact:** ilia.iliev94@gmail.com
+**Contact:** ilia.agentov@gmail.com
 
 nodepiazza is built to keep your data on your device. There are no nodepiazza
 servers, no accounts, and no analytics. This policy explains exactly what data
