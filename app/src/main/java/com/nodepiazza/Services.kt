@@ -39,8 +39,7 @@ object Services {
         private set
     lateinit var modelPrefs: ModelPreferences
         private set
-    lateinit var modelRegistry: ModelRegistry
-        private set
+    private lateinit var modelRegistry: ModelRegistry
     lateinit var modelsFolder: File
         private set
 

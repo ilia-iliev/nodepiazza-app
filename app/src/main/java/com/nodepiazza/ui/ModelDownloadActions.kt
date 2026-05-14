@@ -35,7 +35,7 @@ sealed interface DownloadPlan {
  * Decide what (if anything) to enqueue for [spec] right now. UI surfaces call [confirmAndEnqueue]
  * after the user has acknowledged the relevant dialog.
  */
-fun planDownload(context: Context, spec: ModelSpec): DownloadPlan {
+private fun planDownload(context: Context, spec: ModelSpec): DownloadPlan {
     val folder = Services.modelsFolder
     val needed = spec.approxBytes
     val free = folder.usableSpaceOrZero()
@@ -45,11 +45,11 @@ fun planDownload(context: Context, spec: ModelSpec): DownloadPlan {
     return if (isUnmetered(context)) DownloadPlan.EnqueueNow else DownloadPlan.NeedsCellularConsent
 }
 
-fun confirmAndEnqueue(context: Context, spec: ModelSpec, requireUnmetered: Boolean) {
+private fun confirmAndEnqueue(context: Context, spec: ModelSpec, requireUnmetered: Boolean) {
     ModelBootstrap.enqueue(context, Services.modelsFolder, spec, requireUnmetered)
 }
 
-fun isUnmetered(context: Context): Boolean {
+private fun isUnmetered(context: Context): Boolean {
     val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         ?: return false
     val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
@@ -81,7 +81,7 @@ private const val SPACE_SAFETY_MARGIN = 64L * 1024 * 1024
 internal fun rememberModelDownloadAction(): (ModelSpec) -> Unit {
     val ctx = LocalContext.current
     var cellularDialog by remember { mutableStateOf<ModelSpec?>(null) }
-    var spaceDialog by remember { mutableStateOf<Pair<ModelSpec, DownloadPlan.NotEnoughSpace>?>(null) }
+    var spaceDialog by remember { mutableStateOf<DownloadPlan.NotEnoughSpace?>(null) }
 
     cellularDialog?.let { spec ->
         CellularWarningDialog(
@@ -93,7 +93,7 @@ internal fun rememberModelDownloadAction(): (ModelSpec) -> Unit {
             onDismiss = { cellularDialog = null },
         )
     }
-    spaceDialog?.let { (_, plan) ->
+    spaceDialog?.let { plan ->
         NotEnoughSpaceDialog(plan = plan, onDismiss = { spaceDialog = null })
     }
 
@@ -101,7 +101,7 @@ internal fun rememberModelDownloadAction(): (ModelSpec) -> Unit {
         when (val plan = planDownload(ctx, spec)) {
             DownloadPlan.EnqueueNow -> confirmAndEnqueue(ctx, spec, requireUnmetered = false)
             DownloadPlan.NeedsCellularConsent -> cellularDialog = spec
-            is DownloadPlan.NotEnoughSpace -> spaceDialog = spec to plan
+            is DownloadPlan.NotEnoughSpace -> spaceDialog = plan
         }
     }
 }
