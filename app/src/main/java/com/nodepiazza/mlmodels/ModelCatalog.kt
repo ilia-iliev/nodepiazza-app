@@ -19,7 +19,7 @@ object ModelCatalog {
     val E2B = ModelSpec(
         id = "e2b",
         displayName = "Gemma 4 E2B",
-        description = "Smaller and faster — the lighter on-device option.",
+        description = "The lighter option.",
         url = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm",
         filename = "gemma-4-E2B-it.litertlm",
         approxBytes = 2_590_000_000L,
@@ -28,7 +28,7 @@ object ModelCatalog {
     val E4B = ModelSpec(
         id = "e4b",
         displayName = "Gemma 4 E4B",
-        description = "Larger and more capable — needs more storage and runs slower.",
+        description = "More capable but needs more storage and is slower.",
         url = "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm",
         filename = "gemma-4-E4B-it.litertlm",
         approxBytes = 3_660_000_000L,
