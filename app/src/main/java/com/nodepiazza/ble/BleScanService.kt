@@ -90,7 +90,7 @@ class BleScanService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("nodepiazza")
-            .setContentText("Scanning for nearby peers")
+            .setContentText("scanning nearby...")
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setOngoing(true)
             .setContentIntent(pi)
@@ -131,12 +131,12 @@ class BleScanService : Service() {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
             val body = if (!peerInterest.isNullOrBlank()) {
-                "$label: \"$peerInterest\" — tap to chat"
+                "Someone wants to chat about \"$peerInterest\""
             } else {
-                "$label is looking for similar things — tap to chat"
+                "Someone wants to chat"
             }
             val notification = NotificationCompat.Builder(context, MATCH_CHANNEL_ID)
-                .setContentTitle("New match")
+                .setContentTitle("match")
                 .setContentText(body)
                 .setSmallIcon(android.R.drawable.stat_notify_chat)
                 .setContentIntent(pi)
@@ -147,6 +147,13 @@ class BleScanService : Service() {
             runCatching {
                 NotificationManagerCompat.from(context)
                     .notify(deviceId, MATCH_NOTIFICATION_ID, notification)
+            }
+        }
+
+        fun cancelMatch(context: Context, deviceId: String) {
+            runCatching {
+                NotificationManagerCompat.from(context)
+                    .cancel(deviceId, MATCH_NOTIFICATION_ID)
             }
         }
     }

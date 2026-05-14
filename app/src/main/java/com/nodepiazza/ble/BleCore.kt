@@ -55,7 +55,10 @@ class BleCore(
 
     private val advertiser = BleAdvertiser(adapter)
     private val scanner = BleScanner(adapter, ::handleScanResult)
-    private val chatReassembler = ChatReassembler(::onChatMessageReceived)
+    private val chatReassembler = ChatReassembler(
+        onMessage = ::onChatMessageReceived,
+        onPresence = coordinator::onPresenceReceived,
+    )
 
     private val clients = ConcurrentHashMap<String, BluetoothGatt>()
     private val mtuByAddress = ConcurrentHashMap<String, Int>()
@@ -117,6 +120,26 @@ class BleCore(
         for (addr in addrs) clients[addr]?.let { runCatching { it.disconnect() } }
     }
 
+    /**
+     * Open the chat with [deviceId] in the coordinator and signal the peer we've opened it by
+     * writing the presence sentinel to every known address. The peer flips its chat status from
+     * "waiting" to "connected" on receipt. If no client is open to an address, pumpSend silently
+     * drops it; the inbound-chat fallback marks the peer opened the next time we hear from them.
+     */
+    fun openChat(deviceId: String) {
+        val addrs = coordinator.openChat(deviceId)
+        for (addr in addrs) {
+            enqueuePresenceFrame(addr)
+            pumpSend(addr)
+        }
+    }
+
+    private fun enqueuePresenceFrame(address: String) {
+        val q = sendQueues.getOrPut(address) { ArrayDeque() }
+        val frame = PendingWrite(Protocol.CHAT_CHAR_UUID, ChatFraming.PRESENCE_FRAME)
+        synchronized(q) { q.addLast(frame) }
+    }
+
     private fun enqueueChatFrames(address: String, text: String) {
         val mtu = mtuByAddress[address] ?: 23
         val frames = ChatFraming.encode(text, mtu).map { PendingWrite(Protocol.CHAT_CHAR_UUID, it) }
@@ -165,7 +188,19 @@ class BleCore(
                 q.addFirst(next)
                 sendInflight[address] = false
             }
+            handleLinkFailure(address)
         }
+    }
+
+    /**
+     * Treat the link to [address] as dead immediately: notify the coordinator (so the chat UI
+     * flips off "Connected" now instead of after Android's slow onConnectionStateChange callback)
+     * and start the gatt teardown. The stack will eventually fire onConnectionStateChange and run
+     * the full cleanup — onDisconnected is idempotent.
+     */
+    private fun handleLinkFailure(address: String) {
+        coordinator.onDisconnected(address)
+        runCatching { clients[address]?.disconnect() }
     }
 
     // ---------- GATT server ----------
@@ -316,10 +351,14 @@ class BleCore(
             if (characteristic.uuid != Protocol.CHAT_CHAR_UUID) return
             val address = gatt.device.address
             Log.d(TAG, "onCharacteristicWrite to=$address status=$status")
-            if (status == BluetoothGatt.GATT_SUCCESS) coordinator.onWriteAcknowledged(address)
             val q = sendQueues[address]
             if (q != null) synchronized(q) { sendInflight[address] = false }
-            pumpSend(address)
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                coordinator.onWriteAcknowledged(address)
+                pumpSend(address)
+            } else {
+                handleLinkFailure(address)
+            }
         }
     }
 

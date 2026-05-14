@@ -53,7 +53,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleOpenChatIntent(intent: Intent?) {
         val deviceId = intent?.getStringExtra(EXTRA_OPEN_CHAT_DEVICE_ID) ?: return
-        Services.coordinator.openChat(deviceId)
+        Services.ble.openChat(deviceId)
     }
 
     companion object {
@@ -94,6 +94,6 @@ fun RootScreen(state: AppState, coordinator: PeerCoordinator, ble: BleCore) {
     if (activeChat != null) {
         ChatScreen(coordinator, ble, activeChat!!)
     } else {
-        MainScreen(state, coordinator)
+        MainScreen(state, coordinator, ble)
     }
 }

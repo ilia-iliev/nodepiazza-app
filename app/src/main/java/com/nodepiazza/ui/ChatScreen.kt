@@ -24,12 +24,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -58,6 +60,7 @@ fun ChatScreen(coordinator: PeerCoordinator, ble: BleCore, deviceId: String) {
     val peers by coordinator.peers.collectAsStateWithLifecycle()
     val peer = peers[deviceId]
     var draft by remember { mutableStateOf("") }
+    var showRejectDialog by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val nowMs by produceState(initialValue = System.currentTimeMillis()) {
         while (true) {
@@ -66,7 +69,9 @@ fun ChatScreen(coordinator: PeerCoordinator, ble: BleCore, deviceId: String) {
         }
     }
     val status = peer?.let { connectionStatus(it, nowMs) } ?: ConnectionStatus.Gone
-    val canSend = status == ConnectionStatus.Connected
+    // Allow sending while waiting too — peer hasn't engaged but the BLE link is up, so the write
+    // succeeds and the message lands in their pending chat ready for when they open it.
+    val canSend = status == ConnectionStatus.Connected || status is ConnectionStatus.WaitingForPeer
 
     AppBackground {
     Scaffold(
@@ -80,10 +85,7 @@ fun ChatScreen(coordinator: PeerCoordinator, ble: BleCore, deviceId: String) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = {
-                        ble.rejectPeer(deviceId)
-                        coordinator.closeChat()
-                    }) {
+                    IconButton(onClick = { showRejectDialog = true }) {
                         Icon(Icons.Default.Block, contentDescription = "reject")
                     }
                 },
@@ -132,27 +134,56 @@ fun ChatScreen(coordinator: PeerCoordinator, ble: BleCore, deviceId: String) {
             }
         }
     }
+    if (showRejectDialog) {
+        AlertDialog(
+            onDismissRequest = { showRejectDialog = false },
+            title = { Text("Reject ${peer?.label ?: "this peer"}?") },
+            text = {
+                Text("You won't be matched with this user for the time being")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showRejectDialog = false
+                    ble.rejectPeer(deviceId)
+                    coordinator.closeChat()
+                }) { Text("Reject") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRejectDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
     }
 }
 
 private sealed class ConnectionStatus {
     data object Connected : ConnectionStatus()
-    data object Reconnecting : ConnectionStatus()
+    data class WaitingForPeer(val label: String) : ConnectionStatus()
     data class OutOfRange(val idleMs: Long) : ConnectionStatus()
     data object Gone : ConnectionStatus()
 
     fun inputHint(): String = when (this) {
         Connected -> "Message"
-        Reconnecting -> "Reconnecting…"
+        is WaitingForPeer -> "Message"
         is OutOfRange -> "Peer is out of range"
         Gone -> "Peer is no longer reachable"
     }
 }
 
-private fun connectionStatus(peer: Peer, nowMs: Long): ConnectionStatus = when {
-    peer.connected -> ConnectionStatus.Connected
-    peer.addresses.isNotEmpty() -> ConnectionStatus.Reconnecting
-    else -> ConnectionStatus.OutOfRange(idleMs = (nowMs - peer.lastSeenMs).coerceAtLeast(0))
+/**
+ * Threshold past which a peer is considered out of range. Android's GATT stack happily reports
+ * an open link long after the peer has actually disappeared, so we infer liveness from how
+ * recently we've observed the peer (scan hit, write ack, inbound chat).
+ */
+private const val CONNECTED_STALENESS_MS = 15_000L
+
+private fun connectionStatus(peer: Peer, nowMs: Long): ConnectionStatus {
+    val staleness = (nowMs - peer.lastSeenMs).coerceAtLeast(0)
+    return when {
+        staleness >= CONNECTED_STALENESS_MS -> ConnectionStatus.OutOfRange(idleMs = staleness)
+        !peer.peerOpenedChat -> ConnectionStatus.WaitingForPeer(peer.label)
+        else -> ConnectionStatus.Connected
+    }
 }
 
 @Composable
@@ -160,13 +191,13 @@ private fun ConnectionStatusRow(status: ConnectionStatus) {
     val (label, dotColor) = when (status) {
         ConnectionStatus.Connected ->
             "Connected" to MaterialTheme.colorScheme.primary
-        ConnectionStatus.Reconnecting ->
-            "Reconnecting…" to MaterialTheme.colorScheme.tertiary
+        is ConnectionStatus.WaitingForPeer ->
+            "Waiting for ${status.label} to open chat" to MaterialTheme.colorScheme.tertiary
         is ConnectionStatus.OutOfRange ->
-            "Out of range — last seen ${formatIdle(status.idleMs)} ago" to
+            "Last visible — ${formatIdle(status.idleMs)} ago" to
                 MaterialTheme.colorScheme.onSurfaceVariant
         ConnectionStatus.Gone ->
-            "Peer is no longer reachable" to MaterialTheme.colorScheme.error
+            "No longer reachable" to MaterialTheme.colorScheme.error
     }
     Row(
         modifier = Modifier

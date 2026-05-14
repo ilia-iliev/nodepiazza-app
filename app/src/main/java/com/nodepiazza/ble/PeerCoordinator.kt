@@ -26,6 +26,10 @@ class PeerCoordinator(
     private val clock: () -> Long = System::currentTimeMillis,
     private val staleNoMessagesMs: Long = DEFAULT_STALE_NO_MESSAGES_MS,
     private val staleWithMessagesMs: Long = DEFAULT_STALE_WITH_MESSAGES_MS,
+    // Fired when a posted match notification for this device id is no longer actionable:
+    // the peer is gone (pruned / fully disconnected / rejected) or the user opened the chat
+    // in-app. Callers wire this to NotificationManagerCompat.cancel.
+    private val onMatchDismissed: (deviceId: String) -> Unit = {},
 ) {
 
     private val _peers = MutableStateFlow<Map<String, Peer>>(emptyMap())
@@ -46,10 +50,20 @@ class PeerCoordinator(
     private val pendingInboundChats = ConcurrentHashMap<String, ArrayDeque<String>>()
     private val lastSeenByDeviceId = ConcurrentHashMap<String, Long>()
     private val clientAddresses: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val peerOpenedDevices: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val pendingPresenceAddresses: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     // ---------- UI focus ----------
 
-    fun openChat(deviceId: String) { _activeChatDeviceId.value = deviceId }
+    /**
+     * Open the chat with [deviceId]. Returns the set of addresses BleCore should send a presence
+     * sentinel to so the peer can flip their UI from "waiting" to "connected".
+     */
+    fun openChat(deviceId: String): Set<String> {
+        _activeChatDeviceId.value = deviceId
+        onMatchDismissed(deviceId)
+        return _peers.value[deviceId]?.addresses.orEmpty()
+    }
 
     /**
      * Close the active chat. If the closing peer is out of range (no addresses left), drop it
@@ -69,9 +83,6 @@ class PeerCoordinator(
     /** BleCore opened an outbound GATT to [address] (whether or not it has connected yet). */
     fun onClientOpened(address: String) {
         clientAddresses.add(address)
-        deviceIdByAddress[address]?.let { id ->
-            updatePeerEntry(id) { withLiveness(it, id) }
-        }
     }
 
     /** BleCore observed a GATT disconnect for [address]. */
@@ -82,15 +93,11 @@ class PeerCoordinator(
         val remaining = peer.addresses - address
         when {
             remaining.isNotEmpty() ->
-                _peers.update {
-                    it + (deviceId to withLiveness(peer.copy(addresses = remaining), deviceId))
-                }
+                _peers.update { it + (deviceId to peer.copy(addresses = remaining)) }
             // Active chat keeps its entry around so the chat doesn't vanish; the UI shows the
-            // out-of-range state from peer.addresses.isEmpty() / connected = false.
+            // out-of-range state from a stale lastSeenMs.
             deviceId == _activeChatDeviceId.value ->
-                _peers.update {
-                    it + (deviceId to withLiveness(peer.copy(addresses = emptySet()), deviceId))
-                }
+                _peers.update { it + (deviceId to peer.copy(addresses = emptySet())) }
             else -> {
                 lastSeenByDeviceId.remove(deviceId)
                 removePeerEntry(deviceId)
@@ -245,6 +252,22 @@ class PeerCoordinator(
         forceMatchedAddresses.add(address)
     }
 
+    // ---------- Peer presence (peer opened chat with us) ----------
+
+    /**
+     * The peer at [address] told us they opened a chat with us. If we already know their device
+     * id, flip the `peerOpenedChat` flag now; otherwise buffer the address so the next interests
+     * decode can apply it.
+     */
+    fun onPresenceReceived(address: String) {
+        val deviceId = deviceIdByAddress[address]
+        if (deviceId == null) {
+            pendingPresenceAddresses.add(address)
+            return
+        }
+        markPeerOpened(deviceId)
+    }
+
     // ---------- Reject ----------
 
     /** Reject a peer; returns the set of addresses BleCore should disconnect. */
@@ -257,6 +280,7 @@ class PeerCoordinator(
             forceMatchedAddresses.remove(addr)
             pendingTexts.remove(addr)
             pendingInboundChats.remove(addr)
+            pendingPresenceAddresses.remove(addr)
         }
         lastSeenByDeviceId.remove(deviceId)
         seenMatches.add(deviceId)
@@ -303,31 +327,50 @@ class PeerCoordinator(
         pendingInboundChats.clear()
         lastSeenByDeviceId.clear()
         clientAddresses.clear()
+        pendingPresenceAddresses.clear()
     }
 
     // ---------- Internal state mutations ----------
 
     private fun mergePeer(deviceId: String, address: String) {
         markSeen(deviceId)
+        if (pendingPresenceAddresses.remove(address)) {
+            peerOpenedDevices.add(deviceId)
+        }
+        val opened = peerOpenedDevices.contains(deviceId)
         _peers.update { current ->
             val existing = current[deviceId]
-            val peer = existing?.copy(addresses = existing.addresses + address)
-                ?: newUnmatchedPeer(deviceId, address)
-            current + (deviceId to withLiveness(peer, deviceId))
+            val peer = existing?.copy(
+                addresses = existing.addresses + address,
+                peerOpenedChat = existing.peerOpenedChat || opened,
+            ) ?: newUnmatchedPeer(deviceId, address).copy(peerOpenedChat = opened)
+            current + (deviceId to peer.withLastSeen(deviceId))
         }
     }
 
     private fun deliverChat(deviceId: String, address: String, text: String) {
         markSeen(deviceId)
         appendChat(deviceId, ChatMessage(ChatSender.Them, text))
+        // Inbound chat is also definitive proof the peer engaged — covers cases where the
+        // presence sentinel was dropped (link race, older build).
+        peerOpenedDevices.add(deviceId)
         val existing = _peers.value[deviceId]
         if (existing == null) {
             _peers.update {
-                it + (deviceId to withLiveness(newMatchedPeer(deviceId, address), deviceId))
+                it + (deviceId to newMatchedPeer(deviceId, address)
+                    .copy(peerOpenedChat = true)
+                    .withLastSeen(deviceId))
             }
-        } else if (!existing.matched) {
-            updatePeerEntry(deviceId) { withLiveness(it.copy(matched = true), deviceId) }
+        } else if (!existing.matched || !existing.peerOpenedChat) {
+            updatePeerEntry(deviceId) {
+                it.copy(matched = true, peerOpenedChat = true).withLastSeen(deviceId)
+            }
         }
+    }
+
+    private fun markPeerOpened(deviceId: String) {
+        if (!peerOpenedDevices.add(deviceId)) return
+        updatePeerEntry(deviceId) { it.copy(peerOpenedChat = true) }
     }
 
     private fun newUnmatchedPeer(deviceId: String, address: String) = Peer(
@@ -344,15 +387,10 @@ class PeerCoordinator(
         matched = true,
     )
 
-    /** Recompute [Peer.connected] and [Peer.lastSeenMs] from current connection state. */
-    private fun withLiveness(peer: Peer, deviceId: String): Peer {
-        val isConnected = peer.addresses.any { clientAddresses.contains(it) }
-        val seen = lastSeenByDeviceId[deviceId] ?: peer.lastSeenMs
-        return if (peer.connected == isConnected && peer.lastSeenMs == seen) {
-            peer
-        } else {
-            peer.copy(connected = isConnected, lastSeenMs = seen)
-        }
+    /** Refresh [Peer.lastSeenMs] from [lastSeenByDeviceId]. */
+    private fun Peer.withLastSeen(deviceId: String): Peer {
+        val seen = lastSeenByDeviceId[deviceId] ?: lastSeenMs
+        return if (lastSeenMs == seen) this else copy(lastSeenMs = seen)
     }
 
     private fun drainPendingTexts(address: String): List<String> =
@@ -390,12 +428,16 @@ class PeerCoordinator(
         _peers.update { it - deviceId }
         _chats.update { it - deviceId }
         if (_activeChatDeviceId.value == deviceId) _activeChatDeviceId.value = null
+        // Allow a returning peer to fire a fresh match notification next encounter.
+        seenMatches.remove(deviceId)
+        peerOpenedDevices.remove(deviceId)
+        onMatchDismissed(deviceId)
     }
 
     private fun markSeen(deviceId: String) {
         lastSeenByDeviceId[deviceId] = clock()
-        // Republish liveness so subscribers (chat header, peer list) see the refreshed timestamp.
-        updatePeerEntry(deviceId) { withLiveness(it, deviceId) }
+        // Republish so subscribers (chat header, peer list) see the refreshed timestamp.
+        updatePeerEntry(deviceId) { it.withLastSeen(deviceId) }
     }
 
     companion object {

@@ -37,10 +37,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nodepiazza.AppState
 import com.nodepiazza.protocol.InterestsPayload
 import com.nodepiazza.protocol.Protocol
+import com.nodepiazza.ble.BleCore
 import com.nodepiazza.ble.PeerCoordinator
 
 @Composable
-fun MainScreen(state: AppState, coordinator: PeerCoordinator) {
+fun MainScreen(state: AppState, coordinator: PeerCoordinator, ble: BleCore) {
     val interests by state.interests.collectAsStateWithLifecycle()
     val peers by coordinator.peers.collectAsStateWithLifecycle()
     val bleEnabled by state.bleEnabled.collectAsStateWithLifecycle()
@@ -119,7 +120,7 @@ fun MainScreen(state: AppState, coordinator: PeerCoordinator) {
                     item { ScanStatusHint(scanning = bleEnabled) }
                 }
                 items(matched, key = { it.deviceId }) { peer ->
-                    MatchedPeerRow(peer, onOpen = { coordinator.openChat(peer.deviceId) })
+                    MatchedPeerRow(peer, onOpen = { ble.openChat(peer.deviceId) })
                 }
 
                 if (others.isNotEmpty()) {

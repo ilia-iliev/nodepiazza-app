@@ -3,10 +3,17 @@ package com.nodepiazza.protocol
 /**
  * Frame chat messages into MTU-sized fragments. Each fragment is `[index:1][total:1][payload...]`.
  * `index == 0` resets the receiver's buffer for that sender; `total - 1` triggers assembly.
+ * `[0xFF][0x00]` is reserved as a control sentinel ("peer opened the chat") — the existing
+ * reassembler already drops it as malformed (`total == 0`), so older builds ignore it cleanly.
  */
 object ChatFraming {
     private const val HEADER_BYTES = 2
     private const val ATT_OPCODE_BYTES = 3
+
+    val PRESENCE_FRAME: ByteArray = byteArrayOf(0xFF.toByte(), 0x00)
+
+    fun isPresenceFrame(frame: ByteArray): Boolean =
+        frame.size == 2 && frame[0] == 0xFF.toByte() && frame[1] == 0x00.toByte()
 
     fun maxPayload(mtu: Int): Int =
         (mtu - ATT_OPCODE_BYTES - HEADER_BYTES).coerceAtLeast(20)

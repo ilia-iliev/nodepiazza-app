@@ -21,7 +21,11 @@ class PeerCoordinatorTest {
     private val addrB = "AA:AA:AA:AA:AA:02"
 
     private val clock = AtomicLong(1_000_000L)
-    private fun newCoord() = PeerCoordinator(myDeviceId = myDeviceId, clock = { clock.get() })
+    private fun newCoord(onMatchDismissed: (String) -> Unit = {}) = PeerCoordinator(
+        myDeviceId = myDeviceId,
+        clock = { clock.get() },
+        onMatchDismissed = onMatchDismissed,
+    )
 
     private fun decoded(deviceId: String, interests: List<String> = emptyList()): InterestsPayload.Decoded =
         InterestsPayload.Decoded(deviceId = deviceId, interests = interests)
@@ -310,7 +314,6 @@ class PeerCoordinatorTest {
         val peer = c.peers.value[peerDeviceId]
         assertNotNull(peer)
         assertTrue(peer!!.addresses.isEmpty())
-        assertFalse(peer.connected)
     }
 
     @Test
@@ -338,14 +341,17 @@ class PeerCoordinatorTest {
     }
 
     @Test
-    fun peerLiveness_reflectsConnectedAndLastSeen() {
+    fun peerLastSeen_isPublishedAndPruneRemovesInactivePeer() {
         val c = newCoord()
         c.onClientOpened(addrA)
         c.onInterestsDecoded(addrA, decoded(peerDeviceId))
         c.onInterestsMatched(peerDeviceId, addrA, matched())
         val live = c.peers.value[peerDeviceId]!!
-        assertTrue(live.connected)
         assertEquals(clock.get(), live.lastSeenMs)
+        // A later scan bumps lastSeenMs on the published peer.
+        clock.addAndGet(5_000L)
+        c.onScanResult(addrA)
+        assertEquals(clock.get(), c.peers.value[peerDeviceId]!!.lastSeenMs)
         c.onDisconnected(addrA)
         // Not active chat → peer is pruned.
         assertNull(c.peers.value[peerDeviceId])
@@ -395,6 +401,80 @@ class PeerCoordinatorTest {
         val r = c.onInterestsMatched(peerDeviceId, addrA, noMatch())
         assertSame(PeerCoordinator.InterestsMatchDecision.NotMatched, r)
         assertFalse(c.peers.value[peerDeviceId]!!.matched)
+    }
+
+    // ---------- Match notification dismissal ----------
+
+    @Test
+    fun pruneStale_firesMatchDismissed() {
+        val dismissed = mutableListOf<String>()
+        val c = newCoord(onMatchDismissed = { dismissed += it })
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        c.onInterestsMatched(peerDeviceId, addrA, matched())
+        clock.addAndGet(PeerCoordinator.DEFAULT_STALE_NO_MESSAGES_MS + 1)
+        c.pruneStale()
+        assertEquals(listOf(peerDeviceId), dismissed)
+    }
+
+    @Test
+    fun rejectPeer_firesMatchDismissed() {
+        val dismissed = mutableListOf<String>()
+        val c = newCoord(onMatchDismissed = { dismissed += it })
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        c.onInterestsMatched(peerDeviceId, addrA, matched())
+        c.rejectPeer(peerDeviceId)
+        assertEquals(listOf(peerDeviceId), dismissed)
+    }
+
+    @Test
+    fun fullDisconnect_firesMatchDismissed() {
+        val dismissed = mutableListOf<String>()
+        val c = newCoord(onMatchDismissed = { dismissed += it })
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        c.onInterestsMatched(peerDeviceId, addrA, matched())
+        c.onDisconnected(addrA)
+        assertEquals(listOf(peerDeviceId), dismissed)
+    }
+
+    @Test
+    fun openChat_firesMatchDismissed() {
+        val dismissed = mutableListOf<String>()
+        val c = newCoord(onMatchDismissed = { dismissed += it })
+        c.openChat(peerDeviceId)
+        assertEquals(listOf(peerDeviceId), dismissed)
+    }
+
+    @Test
+    fun partialDisconnect_keepsPeer_doesNotFireDismiss() {
+        val dismissed = mutableListOf<String>()
+        val c = newCoord(onMatchDismissed = { dismissed += it })
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        c.onInterestsMatched(peerDeviceId, addrA, matched())
+        c.onClientOpened(addrB)
+        c.onInterestsDecoded(addrB, decoded(peerDeviceId))
+        c.onInterestsMatched(peerDeviceId, addrB, matched())
+        c.onDisconnected(addrA)
+        assertTrue(dismissed.isEmpty())
+    }
+
+    @Test
+    fun returningPeerAfterPrune_reNotifies() {
+        val c = newCoord()
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        val first = c.onInterestsMatched(peerDeviceId, addrA, matched("espresso"))
+        assertNotNull((first as PeerCoordinator.InterestsMatchDecision.Matched).notifyLabel)
+        clock.addAndGet(PeerCoordinator.DEFAULT_STALE_NO_MESSAGES_MS + 1)
+        c.pruneStale()
+        // Peer comes back later.
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        val second = c.onInterestsMatched(peerDeviceId, addrA, matched("espresso"))
+        assertNotNull((second as PeerCoordinator.InterestsMatchDecision.Matched).notifyLabel)
     }
 
     // ---------- Reset ----------

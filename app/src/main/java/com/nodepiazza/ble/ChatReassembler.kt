@@ -1,14 +1,17 @@
 package com.nodepiazza.ble
 
+import com.nodepiazza.protocol.ChatFraming
 import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Reassembles multi-fragment chat messages keyed by peer address. Each fragment is
  * `[index:1][total:1][payload...]`; index 0 resets the buffer, the final fragment triggers
- * delivery via [onMessage].
+ * delivery via [onMessage]. The reserved `[0xFF][0x00]` sentinel is forwarded to [onPresence]
+ * to signal that the peer has opened a chat with us.
  */
 internal class ChatReassembler(
     private val onMessage: (address: String, text: String) -> Unit,
+    private val onPresence: (address: String) -> Unit = {},
 ) {
     private val buffers = ConcurrentHashMap<String, ChatRecvBuffer>()
 
@@ -20,6 +23,10 @@ internal class ChatReassembler(
 
     fun onFragment(address: String, frame: ByteArray) {
         if (frame.size < 2) return
+        if (ChatFraming.isPresenceFrame(frame)) {
+            onPresence(address)
+            return
+        }
         val index = frame[0].toInt() and 0xFF
         val total = frame[1].toInt() and 0xFF
         if (total == 0 || index >= total) return

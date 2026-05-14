@@ -2,6 +2,7 @@ package com.nodepiazza
 
 import android.content.Context
 import com.nodepiazza.ble.BleCore
+import com.nodepiazza.ble.BleScanService
 import com.nodepiazza.ble.PeerCoordinator
 import com.nodepiazza.llm.CachingLlmService
 import com.nodepiazza.llm.LiteRtLlmService
@@ -60,7 +61,10 @@ object Services {
                 fallback = StubLlmService(),
             ),
         )
-        coordinator = PeerCoordinator(myDeviceId = state.myDeviceId)
+        coordinator = PeerCoordinator(
+            myDeviceId = state.myDeviceId,
+            onMatchDismissed = { deviceId -> BleScanService.cancelMatch(app, deviceId) },
+        )
         ble = BleCore(app, state, coordinator)
         modelPrefs = ModelPreferences(app)
         modelsFolder = runBlocking { modelPrefs.folderPath.first() }
