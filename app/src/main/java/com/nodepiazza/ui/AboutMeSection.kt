@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.dp
 internal fun AboutMeSection(value: String, onChange: (String) -> Unit) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            SectionLabel("Only your phone sees")
+            SectionLabel("Private to you")
             Spacer(Modifier.weight(1f))
             Icon(
                 imageVector = Icons.Default.Lock,
@@ -35,11 +35,6 @@ internal fun AboutMeSection(value: String, onChange: (String) -> Unit) {
             )
         }
         Spacer(Modifier.height(2.dp))
-        Text(
-            "Private to your device. Never broadcast",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         Spacer(Modifier.height(8.dp))
         Surface(
             shape = MaterialTheme.shapes.medium,
@@ -58,7 +53,7 @@ internal fun AboutMeSection(value: String, onChange: (String) -> Unit) {
                 decorationBox = { inner ->
                     if (value.isEmpty()) {
                         Text(
-                            "Anything that might help decide who you'd want to meet",
+                            "Optional. Anything that improves matching.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = LocalContentColor.current.copy(alpha = 0.55f),
                         )

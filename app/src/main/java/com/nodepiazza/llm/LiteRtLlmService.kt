@@ -8,14 +8,13 @@ import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.SamplerConfig
-import com.nodepiazza.LlmMatch
-import com.nodepiazza.LlmService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.util.Locale
 
 /**
  * LlmService backed by the LiteRT-LM on-device runtime. Falls back to [fallback] on any failure
@@ -29,6 +28,9 @@ import java.io.File
 class LiteRtLlmService(
     private val modelPathProvider: () -> String?,
     private val fallback: LlmService,
+    private val languageProvider: () -> String? = {
+        Locale.getDefault().getDisplayLanguage(Locale.ENGLISH).ifBlank { null }
+    },
 ) : LlmService {
 
     private val mutex = Mutex()
@@ -59,7 +61,7 @@ class LiteRtLlmService(
     }
 
     private suspend fun tryLlm(peerInterests: List<String>): MatchVerdict? {
-        val prompt = MatchPrompt.build(myInterests, myAbout, peerInterests)
+        val prompt = MatchPrompt.build(myInterests, myAbout, peerInterests, languageProvider())
         val raw = withContext(Dispatchers.Default) {
             withTimeoutOrNull(INFERENCE_TIMEOUT_MS) {
                 mutex.withLock {
@@ -112,13 +114,6 @@ class LiteRtLlmService(
             if (eng != null) return eng
         }
         return null
-    }
-
-    suspend fun close() {
-        mutex.withLock {
-            engineForPath?.let { runCatching { it.second.close() } }
-            engineForPath = null
-        }
     }
 
     companion object {

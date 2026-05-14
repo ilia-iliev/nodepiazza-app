@@ -115,8 +115,10 @@ class BleCore(
         }
     }
 
-    fun rejectPeer(deviceId: String) {
-        val addrs = coordinator.rejectPeer(deviceId)
+    /** Permanently block a peer: persist the block, tear down the coordinator state, drop links. */
+    fun blockPeer(deviceId: String) {
+        state.blockDevice(deviceId)
+        val addrs = coordinator.blockPeer(deviceId)
         for (addr in addrs) clients[addr]?.let { runCatching { it.disconnect() } }
     }
 
@@ -384,8 +386,12 @@ class BleCore(
                     val match = Services.llm.match(peerInterests)
                     Log.d(TAG, "interests read addr=$address device=$deviceId matched=${match.matched}")
                     when (val d = coordinator.onInterestsMatched(deviceId, address, match)) {
-                        PeerCoordinator.InterestsMatchDecision.NotMatched ->
-                            runCatching { gatt.disconnect() }
+                        is PeerCoordinator.InterestsMatchDecision.NotMatched ->
+                            // Peer stays connected and visible so the user can still open a chat;
+                            // only over-cap no-match peers get dropped.
+                            for (addr in d.evictedAddresses) {
+                                clients[addr]?.let { runCatching { it.disconnect() } }
+                            }
                         is PeerCoordinator.InterestsMatchDecision.Matched -> {
                             for (t in d.pendingOutboundTexts) enqueueChatFrames(address, t)
                             pumpSend(address)

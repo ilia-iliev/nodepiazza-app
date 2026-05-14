@@ -108,6 +108,7 @@ fun MainScreen(state: AppState, coordinator: PeerCoordinator, ble: BleCore) {
                         onUpdateText = state::updateInterest,
                         onAdd = state::addInterest,
                         onRemove = state::removeInterest,
+                        onDismissPlaceholders = state::dismissPlaceholders,
                     )
                 }
 
@@ -116,7 +117,7 @@ fun MainScreen(state: AppState, coordinator: PeerCoordinator, ble: BleCore) {
 
                 item { Spacer(Modifier.height(20.dp)) }
                 item { SectionLabel("Nearby peers") }
-                if (matched.isEmpty()) {
+                if (peers.isEmpty()) {
                     item { ScanStatusHint(scanning = bleEnabled) }
                 }
                 items(matched, key = { it.deviceId }) { peer ->
@@ -127,7 +128,7 @@ fun MainScreen(state: AppState, coordinator: PeerCoordinator, ble: BleCore) {
                     item { Spacer(Modifier.height(16.dp)) }
                     item { SectionLabel("Other devices nearby") }
                     items(others, key = { it.deviceId }) { peer ->
-                        OtherPeerRow(peer)
+                        OtherPeerRow(peer, onOpen = { ble.openChat(peer.deviceId) })
                     }
                 }
             }

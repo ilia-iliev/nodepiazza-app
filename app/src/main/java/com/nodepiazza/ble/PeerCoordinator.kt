@@ -3,7 +3,7 @@ package com.nodepiazza.ble
 import androidx.annotation.VisibleForTesting
 import com.nodepiazza.ChatMessage
 import com.nodepiazza.ChatSender
-import com.nodepiazza.LlmMatch
+import com.nodepiazza.llm.LlmMatch
 import com.nodepiazza.Peer
 import com.nodepiazza.protocol.InterestsPayload
 import java.util.concurrent.ConcurrentHashMap
@@ -23,6 +23,8 @@ import kotlinx.coroutines.flow.update
  */
 class PeerCoordinator(
     val myDeviceId: String,
+    // Device ids the user has permanently blocked, restored from persistent storage at startup.
+    initiallyBlocked: Set<String> = emptySet(),
     private val clock: () -> Long = System::currentTimeMillis,
     private val staleNoMessagesMs: Long = DEFAULT_STALE_NO_MESSAGES_MS,
     private val staleWithMessagesMs: Long = DEFAULT_STALE_WITH_MESSAGES_MS,
@@ -44,6 +46,9 @@ class PeerCoordinator(
     private val seenMatches: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val rejectedDevices: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val rejectedAddresses: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    // Permanently blocked device ids. Unlike [rejectedDevices], this is never cleared by
+    // [resetOnBleStop]; cross-restart persistence is owned by AppState, which seeds it here.
+    private val blockedDevices: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val forceMatchedAddresses: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val deviceIdByAddress = ConcurrentHashMap<String, String>()
     private val pendingTexts = ConcurrentHashMap<String, ArrayDeque<String>>()
@@ -51,7 +56,16 @@ class PeerCoordinator(
     private val lastSeenByDeviceId = ConcurrentHashMap<String, Long>()
     private val clientAddresses: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val peerOpenedDevices: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val userOpenedDevices: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val pendingPresenceAddresses: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    init {
+        blockedDevices.addAll(initiallyBlocked)
+    }
+
+    /** A peer the user has either rejected this session or permanently blocked. */
+    private fun isExcluded(deviceId: String): Boolean =
+        rejectedDevices.contains(deviceId) || blockedDevices.contains(deviceId)
 
     // ---------- UI focus ----------
 
@@ -61,6 +75,9 @@ class PeerCoordinator(
      */
     fun openChat(deviceId: String): Set<String> {
         _activeChatDeviceId.value = deviceId
+        // Remember the user engaged this peer in-app: a later LLM match should still label the
+        // chat but must not raise a notification for a conversation they're already in.
+        userOpenedDevices.add(deviceId)
         onMatchDismissed(deviceId)
         return _peers.value[deviceId]?.addresses.orEmpty()
     }
@@ -126,7 +143,7 @@ class PeerCoordinator(
         if (knownDeviceId != null) markSeen(knownDeviceId)
         if (clientAddresses.contains(address)) return ScanDecision.Skip
         if (rejectedAddresses.contains(address)) return ScanDecision.Skip
-        if (knownDeviceId != null && rejectedDevices.contains(knownDeviceId)) return ScanDecision.Skip
+        if (knownDeviceId != null && isExcluded(knownDeviceId)) return ScanDecision.Skip
         return ScanDecision.Connect
     }
 
@@ -157,7 +174,7 @@ class PeerCoordinator(
         if (decoded == null) return InterestsDecodeDecision.DropDecodeFailed
         val deviceId = decoded.deviceId
         if (deviceId == myDeviceId) return InterestsDecodeDecision.DropLoopback
-        if (rejectedDevices.contains(deviceId)) {
+        if (isExcluded(deviceId)) {
             rejectedAddresses.add(address)
             return InterestsDecodeDecision.DropRejected
         }
@@ -174,11 +191,18 @@ class PeerCoordinator(
     }
 
     sealed class InterestsMatchDecision {
-        /** LLM match failed; cache the address as no-match. BleCore should disconnect. */
-        data object NotMatched : InterestsMatchDecision()
+        /**
+         * LLM match failed. The peer stays visible and connected so the user can still open a
+         * chat with it — it just keeps its `peer-XXXXX` label. [evictedAddresses] are other
+         * no-match peers booted to honour [NO_MATCH_CAP]; BleCore should disconnect them.
+         */
+        data class NotMatched(val evictedAddresses: Set<String>) : InterestsMatchDecision()
         data class Matched(
             val pendingOutboundTexts: List<String>,
-            /** Label to use in the match notification; null if we've already notified this device. */
+            /**
+             * Label to use in the match notification; null if we've already notified this device
+             * or the user has already opened the chat in-app.
+             */
             val notifyLabel: String?,
             val peerInterest: String?,
         ) : InterestsMatchDecision()
@@ -190,17 +214,41 @@ class PeerCoordinator(
         match: LlmMatch,
     ): InterestsMatchDecision {
         if (!match.matched) {
-            return InterestsMatchDecision.NotMatched
+            return InterestsMatchDecision.NotMatched(enforceNoMatchCap(keepDeviceId = deviceId))
         }
         updatePeerEntry(deviceId) { it.copy(matched = true, matchReason = match.peerInterest) }
         val drained = drainPendingTexts(address)
         val firstTime = seenMatches.add(deviceId)
-        val label = if (firstTime) (_peers.value[deviceId]?.label ?: labelFor(address)) else null
+        val notify = firstTime && !userOpenedDevices.contains(deviceId)
+        val label = if (notify) (_peers.value[deviceId]?.label ?: labelFor(address)) else null
         return InterestsMatchDecision.Matched(
             pendingOutboundTexts = drained,
             notifyLabel = label,
             peerInterest = match.peerInterest,
         )
+    }
+
+    /**
+     * Cap how many no-match peers we keep connected at once. Matched peers are exempt, as are the
+     * active chat and [keepDeviceId] (the peer that just produced this verdict). Evicts the
+     * least-recently-seen no-match peers over the cap and returns their addresses to disconnect.
+     */
+    private fun enforceNoMatchCap(keepDeviceId: String): Set<String> {
+        val noMatch = _peers.value.values.filter { !it.matched }
+        if (noMatch.size <= NO_MATCH_CAP) return emptySet()
+        val active = _activeChatDeviceId.value
+        val evictable = noMatch
+            .filter { it.deviceId != keepDeviceId && it.deviceId != active }
+            .sortedBy { lastSeenByDeviceId[it.deviceId] ?: 0L }
+        val toEvict = evictable.take(noMatch.size - NO_MATCH_CAP)
+        val addresses = mutableSetOf<String>()
+        for (peer in toEvict) {
+            addresses += peer.addresses
+            for (addr in peer.addresses) deviceIdByAddress.remove(addr)
+            lastSeenByDeviceId.remove(peer.deviceId)
+            removePeerEntry(peer.deviceId)
+        }
+        return addresses
     }
 
     // ---------- Inbound chat ----------
@@ -220,7 +268,7 @@ class PeerCoordinator(
             synchronized(q) { q.addLast(text) }
             return ChatReceiveDecision.BufferAndEnsureClient
         }
-        if (rejectedDevices.contains(deviceId)) return ChatReceiveDecision.Ignore
+        if (isExcluded(deviceId)) return ChatReceiveDecision.Ignore
         deliverChat(deviceId, address, text)
         return ChatReceiveDecision.Delivered(needsEnsureClient = !clientAddresses.contains(address))
     }
@@ -268,7 +316,17 @@ class PeerCoordinator(
         markPeerOpened(deviceId)
     }
 
-    // ---------- Reject ----------
+    // ---------- Block / Reject ----------
+
+    /**
+     * Permanently block a peer. Same connection teardown as [rejectPeer], but the device id is
+     * also held in [blockedDevices], which [resetOnBleStop] never clears — so the block survives
+     * BLE on/off cycles. Cross-restart persistence is the caller's job (see AppState).
+     */
+    fun blockPeer(deviceId: String): Set<String> {
+        blockedDevices.add(deviceId)
+        return rejectPeer(deviceId)
+    }
 
     /** Reject a peer; returns the set of addresses BleCore should disconnect. */
     fun rejectPeer(deviceId: String): Set<String> {
@@ -431,6 +489,7 @@ class PeerCoordinator(
         // Allow a returning peer to fire a fresh match notification next encounter.
         seenMatches.remove(deviceId)
         peerOpenedDevices.remove(deviceId)
+        userOpenedDevices.remove(deviceId)
         onMatchDismissed(deviceId)
     }
 
@@ -443,5 +502,7 @@ class PeerCoordinator(
     companion object {
         const val DEFAULT_STALE_NO_MESSAGES_MS = 2 * 60 * 1000L
         const val DEFAULT_STALE_WITH_MESSAGES_MS = 30 * 60 * 1000L
+        /** Max no-match peers kept connected at once; matched peers are uncapped. */
+        const val NO_MATCH_CAP = 3
     }
 }

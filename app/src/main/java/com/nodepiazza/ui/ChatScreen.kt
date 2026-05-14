@@ -2,6 +2,9 @@
 
 package com.nodepiazza.ui
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,8 +26,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nodepiazza.ChatMessage
@@ -60,7 +66,9 @@ fun ChatScreen(coordinator: PeerCoordinator, ble: BleCore, deviceId: String) {
     val peers by coordinator.peers.collectAsStateWithLifecycle()
     val peer = peers[deviceId]
     var draft by remember { mutableStateOf("") }
-    var showRejectDialog by remember { mutableStateOf(false) }
+    var showBlockDialog by remember { mutableStateOf(false) }
+    var showReportDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
     val listState = rememberLazyListState()
     val nowMs by produceState(initialValue = System.currentTimeMillis()) {
         while (true) {
@@ -78,15 +86,35 @@ fun ChatScreen(coordinator: PeerCoordinator, ble: BleCore, deviceId: String) {
         containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
-                title = { Text(peer?.label ?: "chat") },
+                title = { Text(peer?.displayTitle ?: "chat") },
                 navigationIcon = {
                     IconButton(onClick = { coordinator.closeChat() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "back")
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showRejectDialog = true }) {
-                        Icon(Icons.Default.Block, contentDescription = "reject")
+                    var menuOpen by remember { mutableStateOf(false) }
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "more options")
+                    }
+                    DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Report user") },
+                            onClick = {
+                                menuOpen = false
+                                showReportDialog = true
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Block user") },
+                            onClick = {
+                                menuOpen = false
+                                showBlockDialog = true
+                            },
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
@@ -134,26 +162,85 @@ fun ChatScreen(coordinator: PeerCoordinator, ble: BleCore, deviceId: String) {
             }
         }
     }
-    if (showRejectDialog) {
+    if (showBlockDialog) {
         AlertDialog(
-            onDismissRequest = { showRejectDialog = false },
-            title = { Text("Reject ${peer?.label ?: "this peer"}?") },
+            onDismissRequest = { showBlockDialog = false },
+            title = { Text("Block ${peer?.label ?: "this user"}?") },
             text = {
-                Text("You won't be matched with this user for the time being")
+                Text(
+                    "You won't see or be matched with this user again, even after " +
+                        "restarting the app.",
+                )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    showRejectDialog = false
-                    ble.rejectPeer(deviceId)
+                    showBlockDialog = false
+                    ble.blockPeer(deviceId)
                     coordinator.closeChat()
-                }) { Text("Reject") }
+                }) { Text("Block") }
             },
             dismissButton = {
-                TextButton(onClick = { showRejectDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showBlockDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+    if (showReportDialog) {
+        AlertDialog(
+            onDismissRequest = { showReportDialog = false },
+            title = { Text("Report ${peer?.label ?: "this user"}?") },
+            text = {
+                Text(
+                    "This opens an email to our moderation team with the recent conversation " +
+                        "attached for review. The user will also be blocked.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showReportDialog = false
+                    sendReportEmail(context, deviceId, peer?.label, messages)
+                    ble.blockPeer(deviceId)
+                    coordinator.closeChat()
+                }) { Text("Report & block") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showReportDialog = false }) { Text("Cancel") }
             },
         )
     }
     }
+}
+
+/** Where abuse reports are sent. Triaged manually — there is no server in this app. */
+private const val REPORT_EMAIL = "ilia.iliev94@gmail.com"
+
+/**
+ * Compose an abuse report email pre-filled with the peer's device id and the recent transcript,
+ * then hand off to the user's email app. No data leaves the device until the user hits send.
+ */
+private fun sendReportEmail(
+    context: Context,
+    deviceId: String,
+    label: String?,
+    messages: List<ChatMessage>,
+) {
+    val transcript = messages.takeLast(20).joinToString("\n") { msg ->
+        val who = if (msg.sender == ChatSender.Me) "me" else "them"
+        "[$who] ${msg.text}"
+    }.ifBlank { "(no messages exchanged)" }
+    val body = buildString {
+        append("User reported: ${label ?: "unknown"}\n")
+        append("Device id: $deviceId\n\n")
+        append("Reason (please describe what happened):\n\n\n")
+        append("--- Recent conversation ---\n")
+        append(transcript)
+    }
+    val intent = Intent(Intent.ACTION_SENDTO).apply {
+        data = Uri.parse("mailto:")
+        putExtra(Intent.EXTRA_EMAIL, arrayOf(REPORT_EMAIL))
+        putExtra(Intent.EXTRA_SUBJECT, "nodepiazza abuse report")
+        putExtra(Intent.EXTRA_TEXT, body)
+    }
+    runCatching { context.startActivity(Intent.createChooser(intent, "Report user")) }
 }
 
 private sealed class ConnectionStatus {

@@ -15,6 +15,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.nodepiazza.AppForeground
 import com.nodepiazza.AppState
 import com.nodepiazza.Services
 import com.nodepiazza.ui.MainActivity
@@ -116,6 +117,8 @@ class BleScanService : Service() {
         }
 
         fun notifyMatch(context: Context, deviceId: String, label: String, peerInterest: String?) {
+            // A user with the app open already sees the peer in their list; only ping in background.
+            if (AppForeground.isForeground) return
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED

@@ -11,16 +11,12 @@ private val Context.modelDataStore by preferencesDataStore(name = "model_prefs")
 
 /**
  * Persistent user choices around model selection. Independent of [ModelRegistry] — the app reads
- * [folderPath] to decide which folder to scan, then reads [selectedModelName] to pick an entry
- * from the scan result.
+ * [selectedModelName] to pick an entry from the registry's scan result.
  */
 class ModelPreferences(private val context: Context) {
 
     val selectedModelName: Flow<String?> =
         context.modelDataStore.data.map { it[KEY_SELECTED] }
-
-    val folderPath: Flow<String?> =
-        context.modelDataStore.data.map { it[KEY_FOLDER] }
 
     suspend fun setSelectedModelName(name: String?) {
         context.modelDataStore.edit { prefs ->
@@ -28,14 +24,7 @@ class ModelPreferences(private val context: Context) {
         }
     }
 
-    suspend fun setFolderPath(path: String?) {
-        context.modelDataStore.edit { prefs ->
-            if (path == null) prefs.remove(KEY_FOLDER) else prefs[KEY_FOLDER] = path
-        }
-    }
-
     private companion object {
         val KEY_SELECTED = stringPreferencesKey("selected_model_name")
-        val KEY_FOLDER = stringPreferencesKey("folder_path")
     }
 }

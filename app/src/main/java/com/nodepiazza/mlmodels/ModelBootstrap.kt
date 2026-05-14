@@ -10,49 +10,34 @@ import androidx.work.workDataOf
 import java.io.File
 
 /**
- * Owns the default model download. `ensureDefault` is the auto-bootstrap path (Wi-Fi only,
- * skipped once any model is present). `enqueueDefault` is the user-initiated path from the
- * picker — pass `requireUnmetered = false` after the user has acknowledged the cellular cost.
+ * Enqueues model downloads. Every download is user-initiated from the picker — there is no
+ * auto-bootstrap, so a model only ever arrives after the user explicitly chose it. Each model
+ * gets its own unique work so downloads are tracked independently. Pass `requireUnmetered = false`
+ * once the user has acknowledged the cellular cost.
  */
 object ModelBootstrap {
 
-    const val DEFAULT_MODEL_URL =
-        "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
-    const val DEFAULT_MODEL_FILENAME = "gemma-4-E2B-it.litertlm"
-    const val DEFAULT_MODEL_DISPLAY_NAME = "Gemma 4 E2B (default)"
-    const val DEFAULT_MODEL_APPROX_BYTES = 1_200_000_000L
+    fun workName(spec: ModelSpec): String = "model_download_${spec.id}"
 
-    const val WORK_NAME = "model_bootstrap_download"
-
-    suspend fun ensureDefault(context: Context, registry: ModelRegistry, folder: File) {
-        if (registry.listModels().isNotEmpty()) return
-        enqueue(context, folder, requireUnmetered = true, replaceExisting = false)
-    }
-
-    /** User-initiated download from the picker — replaces any pending Wi-Fi-only enqueue. */
-    fun enqueueDefault(context: Context, folder: File, requireUnmetered: Boolean) {
-        enqueue(context, folder, requireUnmetered, replaceExisting = true)
-    }
-
-    private fun enqueue(
-        context: Context,
-        folder: File,
-        requireUnmetered: Boolean,
-        replaceExisting: Boolean,
-    ) {
+    fun enqueue(context: Context, folder: File, spec: ModelSpec, requireUnmetered: Boolean) {
         folder.mkdirs()
-        val target = File(folder, DEFAULT_MODEL_FILENAME)
+        val target = File(folder, spec.filename)
         val networkType = if (requireUnmetered) NetworkType.UNMETERED else NetworkType.CONNECTED
         val request = OneTimeWorkRequestBuilder<ModelDownloadWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(networkType).build())
             .setInputData(
                 workDataOf(
-                    ModelDownloadWorker.KEY_URL to DEFAULT_MODEL_URL,
+                    ModelDownloadWorker.KEY_URL to spec.url,
                     ModelDownloadWorker.KEY_TARGET to target.absolutePath,
                 )
             )
             .build()
-        val policy = if (replaceExisting) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP
-        WorkManager.getInstance(context).enqueueUniqueWork(WORK_NAME, policy, request)
+        // KEEP leaves a running/queued download alone but lets a retry replace a terminal one.
+        WorkManager.getInstance(context)
+            .enqueueUniqueWork(workName(spec), ExistingWorkPolicy.KEEP, request)
+    }
+
+    fun cancel(context: Context, spec: ModelSpec) {
+        WorkManager.getInstance(context).cancelUniqueWork(workName(spec))
     }
 }

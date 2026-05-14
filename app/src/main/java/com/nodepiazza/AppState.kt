@@ -41,6 +41,11 @@ class AppState private constructor(context: Context) {
     private val _aboutMe = MutableStateFlow(loadAbout())
     val aboutMe: StateFlow<String> = _aboutMe.asStateFlow()
 
+    private val _blockedDeviceIds = MutableStateFlow(
+        prefs.getStringSet(KEY_BLOCKED, emptySet()).orEmpty().toSet()
+    )
+    val blockedDeviceIds: StateFlow<Set<String>> = _blockedDeviceIds.asStateFlow()
+
     fun addInterest(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
@@ -50,6 +55,13 @@ class AppState private constructor(context: Context) {
 
     fun removeInterest(id: String) {
         _interests.update { list -> list.filterNot { it.id == id } }
+        persistInterests()
+    }
+
+    /** Drop the pre-loaded sample interests once the user first engages with the chips. */
+    fun dismissPlaceholders() {
+        if (_interests.value.none { it.placeholder }) return
+        _interests.update { list -> list.filterNot { it.placeholder } }
         persistInterests()
     }
 
@@ -77,11 +89,21 @@ class AppState private constructor(context: Context) {
         persistAbout()
     }
 
+    /** Permanently block a peer by stable device id. Survives restarts and BLE on/off cycles. */
+    fun blockDevice(deviceId: String) {
+        if (deviceId in _blockedDeviceIds.value) return
+        _blockedDeviceIds.update { it + deviceId }
+        prefs.edit().putStringSet(KEY_BLOCKED, _blockedDeviceIds.value).apply()
+    }
+
     private fun loadInterests(): List<Interest> {
         val source = when {
             file.exists() -> file
             legacyFile.exists() -> legacyFile
-            else -> return emptyList()
+            // Fresh install: seed sample interests so the chips read as tappable pills.
+            else -> return SEED_INTERESTS.map {
+                Interest(id = UUID.randomUUID().toString(), text = it, placeholder = true)
+            }
         }
         val text = source.readText()
         if (text.isBlank()) return emptyList()
@@ -103,6 +125,8 @@ class AppState private constructor(context: Context) {
     companion object {
         private const val KEY_BLE_ENABLED = "ble_enabled"
         private const val KEY_DEVICE_ID = "device_id"
+        private const val KEY_BLOCKED = "blocked_device_ids"
+        private val SEED_INTERESTS = listOf("Music", "Cinema")
 
         @Volatile private var instance: AppState? = null
         fun get(context: Context): AppState =

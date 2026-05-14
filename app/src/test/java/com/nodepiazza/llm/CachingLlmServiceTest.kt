@@ -1,7 +1,5 @@
 package com.nodepiazza.llm
 
-import com.nodepiazza.LlmMatch
-import com.nodepiazza.LlmService
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame

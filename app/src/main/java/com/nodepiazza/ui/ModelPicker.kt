@@ -3,7 +3,6 @@
 package com.nodepiazza.ui
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -18,10 +17,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -36,29 +36,27 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nodepiazza.Services
-import com.nodepiazza.mlmodels.ModelBootstrap
+import com.nodepiazza.mlmodels.ModelCatalog
 import com.nodepiazza.mlmodels.ModelDownloadState
 import com.nodepiazza.mlmodels.ModelEntry
+import com.nodepiazza.mlmodels.ModelSpec
 import kotlinx.coroutines.launch
 
 @Composable
 fun ModelPickerChip(modifier: Modifier = Modifier) {
     val selected by Services.modelPrefs.selectedModelName.collectAsStateWithLifecycle(initialValue = null)
-    val download by Services.downloadState.collectAsStateWithLifecycle()
+    val downloads by Services.downloadStates.collectAsStateWithLifecycle()
     val models by Services.models.collectAsStateWithLifecycle()
     var sheetOpen by remember { mutableStateOf(false) }
 
-    val label = chipLabel(selected, models, download)
-
     TextButton(onClick = { sheetOpen = true }, modifier = modifier) {
         Text(
-            label,
+            chipLabel(selected, models, downloads),
             style = MaterialTheme.typography.labelLarge,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -73,12 +71,7 @@ fun ModelPickerChip(modifier: Modifier = Modifier) {
 
     if (sheetOpen) {
         ModalBottomSheet(onDismissRequest = { sheetOpen = false }) {
-            ModelPickerSheet(
-                models = models,
-                selectedName = selected,
-                download = download,
-                onPicked = { sheetOpen = false },
-            )
+            ModelPickerSheet(onModelSelected = { sheetOpen = false })
         }
     }
 }
@@ -86,45 +79,34 @@ fun ModelPickerChip(modifier: Modifier = Modifier) {
 private fun chipLabel(
     selected: String?,
     models: List<ModelEntry>,
-    download: ModelDownloadState,
+    downloads: Map<String, ModelDownloadState>,
 ): String {
-    val name = selected?.takeIf { it.isNotBlank() && models.any { m -> m.name == it } }
-    if (name != null) return name.substringBeforeLast('.')
-    return when (val d = download) {
-        is ModelDownloadState.Running -> {
-            val pct = if (d.total > 0) (d.bytes * 100 / d.total).toInt() else 0
-            "Downloading $pct%"
-        }
-        ModelDownloadState.WaitingForNetwork -> "Waiting for Wi-Fi"
-        ModelDownloadState.OutOfSpace -> "Not enough space"
-        ModelDownloadState.Failed -> "Download failed"
-        else -> if (models.isNotEmpty()) "Pick model" else "No model"
+    val installed = ModelCatalog.byFilename(selected)
+        ?.takeIf { models.any { m -> m.name == it.filename } }
+    if (installed != null) return installed.displayName
+
+    val running = downloads.values.filterIsInstance<ModelDownloadState.Running>().firstOrNull()
+    if (running != null) {
+        val pct = if (running.total > 0) (running.bytes * 100 / running.total).toInt() else 0
+        return "Downloading $pct%"
     }
+    if (downloads.values.any { it is ModelDownloadState.WaitingForNetwork }) return "Waiting for Wi-Fi"
+    return if (models.isEmpty()) "No model" else "Pick model"
 }
 
+/**
+ * The model list shown in a bottom sheet. Reads everything it needs from [Services], so both the
+ * top-bar chip and the main-screen banner can host it. [onModelSelected] fires when the user
+ * activates an installed model (so the host can close the sheet); downloads and deletes leave it
+ * open so progress stays visible.
+ */
 @Composable
-private fun ModelPickerSheet(
-    models: List<ModelEntry>,
-    selectedName: String?,
-    download: ModelDownloadState,
-    onPicked: () -> Unit,
-) {
-    val ctx = LocalContext.current
+internal fun ModelPickerSheet(onModelSelected: () -> Unit) {
     val scope = rememberCoroutineScope()
-    var cellularDialog by remember { mutableStateOf(false) }
-    var spaceDialog by remember { mutableStateOf<DownloadPlan.NotEnoughSpace?>(null) }
-
-    val defaultInstalled = models.any { it.name == ModelBootstrap.DEFAULT_MODEL_FILENAME }
-    val activeDownload = download is ModelDownloadState.Running ||
-        download is ModelDownloadState.WaitingForNetwork
-
-    val onTapDownload = {
-        when (val plan = planDefaultDownload(ctx)) {
-            DownloadPlan.EnqueueNow -> confirmAndEnqueue(ctx, requireUnmetered = false)
-            DownloadPlan.NeedsCellularConsent -> cellularDialog = true
-            is DownloadPlan.NotEnoughSpace -> spaceDialog = plan
-        }
-    }
+    val models by Services.models.collectAsStateWithLifecycle()
+    val selected by Services.modelPrefs.selectedModelName.collectAsStateWithLifecycle(initialValue = null)
+    val downloads by Services.downloadStates.collectAsStateWithLifecycle()
+    val onDownload = rememberModelDownloadAction()
 
     LazyColumn(
         modifier = Modifier.fillMaxWidth(),
@@ -137,179 +119,96 @@ private fun ModelPickerSheet(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             )
         }
-        if (models.isEmpty() && !activeDownload) {
-            item {
-                Text(
-                    "No models installed yet.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
-            }
-        }
-        items(models, key = { it.path }) { entry ->
-            val isSelected = entry.name == selectedName
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        scope.launch {
-                            Services.modelPrefs.setSelectedModelName(entry.name)
-                            onPicked()
-                        }
+        items(ModelCatalog.ALL, key = { it.id }) { spec ->
+            ModelRow(
+                spec = spec,
+                installed = models.any { it.name == spec.filename },
+                isSelected = selected == spec.filename,
+                state = downloads[spec.id] ?: ModelDownloadState.Idle,
+                onSelect = {
+                    scope.launch {
+                        Services.modelPrefs.setSelectedModelName(spec.filename)
+                        onModelSelected()
                     }
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        entry.name,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                    )
-                    Text(
-                        formatSize(entry.sizeBytes),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (isSelected) {
-                    Icon(Icons.Default.Check, contentDescription = "selected")
-                }
-            }
+                },
+                onDownload = { onDownload(spec) },
+                onDelete = { scope.launch { Services.deleteModel(spec) } },
+            )
         }
-
-        if (activeDownload) {
-            item { DownloadProgressRow(download) }
-        }
-
-        if (download is ModelDownloadState.OutOfSpace) {
-            item { OutOfSpaceRow() }
-        }
-
-        if (!defaultInstalled && !activeDownload) {
-            item { DefaultDownloadRow(onDownload = onTapDownload) }
-        }
-    }
-
-    if (cellularDialog) {
-        CellularWarningDialog(
-            onConfirm = {
-                cellularDialog = false
-                confirmAndEnqueue(ctx, requireUnmetered = false)
-            },
-            onDismiss = { cellularDialog = false },
-        )
-    }
-    spaceDialog?.let { plan ->
-        NotEnoughSpaceDialog(plan = plan, onDismiss = { spaceDialog = null })
     }
 }
 
 @Composable
-private fun DownloadProgressRow(state: ModelDownloadState) {
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+private fun ModelRow(
+    spec: ModelSpec,
+    installed: Boolean,
+    isSelected: Boolean,
+    state: ModelDownloadState,
+    onSelect: () -> Unit,
+    onDownload: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val downloading = state is ModelDownloadState.Running ||
+        state is ModelDownloadState.WaitingForNetwork
+    val rowModifier = if (installed && !downloading) {
+        Modifier.fillMaxWidth().clickable(onClick = onSelect)
+    } else {
+        Modifier.fillMaxWidth()
+    }
+    Column(rowModifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.size(8.dp))
-            Text(ModelBootstrap.DEFAULT_MODEL_DISPLAY_NAME, style = MaterialTheme.typography.bodyMedium)
-        }
-        Spacer(Modifier.height(6.dp))
-        when (state) {
-            is ModelDownloadState.Running -> {
-                val pct = if (state.total > 0) state.bytes.toFloat() / state.total else null
-                if (pct != null) {
-                    LinearProgressIndicator(progress = { pct }, modifier = Modifier.fillMaxWidth())
-                } else {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            Column(Modifier.weight(1f)) {
+                Text(
+                    spec.displayName,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                )
+                Text(
+                    statusLine(spec, installed, state),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            when {
+                installed && isSelected -> {
+                    Icon(Icons.Default.Check, contentDescription = "Active model")
+                    IconButton(onClick = onDelete) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete ${spec.displayName}")
+                    }
                 }
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    if (state.total > 0)
-                        "${formatSize(state.bytes)} / ${formatSize(state.total)}"
-                    else
-                        "Starting…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                installed -> {
+                    TextButton(onClick = onSelect) { Text("Use") }
+                    IconButton(onClick = onDelete) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete ${spec.displayName}")
+                    }
+                }
+                downloading -> OutlinedButton(onClick = onDelete) { Text("Cancel") }
+                else -> Button(onClick = onDownload) {
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.size(6.dp))
+                    Text(if (state is ModelDownloadState.Failed) "Retry" else "Download")
+                }
             }
-            ModelDownloadState.WaitingForNetwork -> {
+        }
+        if (state is ModelDownloadState.Running) {
+            Spacer(Modifier.height(6.dp))
+            val pct = if (state.total > 0) state.bytes.toFloat() / state.total else null
+            if (pct != null) {
+                LinearProgressIndicator(progress = { pct }, modifier = Modifier.fillMaxWidth())
+            } else {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "Waiting for Wi-Fi.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            else -> Unit
-        }
-    }
-}
-
-@Composable
-private fun OutOfSpaceRow() {
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-        Text(
-            "Not enough space",
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.error,
-        )
-        Text(
-            "Free up some storage and try again.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun DefaultDownloadRow(onDownload: () -> Unit) {
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-        Text(ModelBootstrap.DEFAULT_MODEL_DISPLAY_NAME, style = MaterialTheme.typography.bodyMedium)
-        Text(
-            "~${formatSize(ModelBootstrap.DEFAULT_MODEL_APPROX_BYTES)} • the recommended on-device model",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onDownload) {
-                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.size(6.dp))
-                Text("Download")
             }
         }
     }
 }
 
-@Composable
-private fun CellularWarningDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Download over cellular?") },
-        text = {
-            Text(
-                "You're not on Wi-Fi. The default model is about " +
-                    formatSize(ModelBootstrap.DEFAULT_MODEL_APPROX_BYTES) +
-                    " — your carrier may charge you. Download anyway?",
-            )
-        },
-        confirmButton = { Button(onClick = onConfirm) { Text("Download") } },
-        dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Wait for Wi-Fi") } },
-    )
-}
-
-@Composable
-private fun NotEnoughSpaceDialog(plan: DownloadPlan.NotEnoughSpace, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Not enough space") },
-        text = {
-            Text(
-                "The default model needs about ${formatSize(plan.needed)} free, but only " +
-                    "${formatSize(plan.free)} is available. Free up space, then try again.",
-            )
-        },
-        confirmButton = { Button(onClick = onDismiss) { Text("OK") } },
-    )
-}
+private fun statusLine(spec: ModelSpec, installed: Boolean, state: ModelDownloadState): String =
+    when {
+        installed -> "Installed • ${formatSize(spec.approxBytes)}"
+        state is ModelDownloadState.Running ->
+            if (state.total > 0) "${formatSize(state.bytes)} / ${formatSize(state.total)}"
+            else "Starting…"
+        state is ModelDownloadState.WaitingForNetwork -> "Waiting for Wi-Fi"
+        state is ModelDownloadState.OutOfSpace -> "Not enough space"
+        state is ModelDownloadState.Failed -> "Download failed"
+        else -> "~${formatSize(spec.approxBytes)} • ${spec.description}"
+    }

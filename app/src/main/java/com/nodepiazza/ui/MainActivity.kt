@@ -19,6 +19,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.nodepiazza.AppForeground
 import com.nodepiazza.AppState
 import com.nodepiazza.Services
 import com.nodepiazza.ble.BleCore
@@ -49,6 +50,16 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleOpenChatIntent(intent)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        AppForeground.isForeground = true
+    }
+
+    override fun onStop() {
+        super.onStop()
+        AppForeground.isForeground = false
     }
 
     private fun handleOpenChatIntent(intent: Intent?) {

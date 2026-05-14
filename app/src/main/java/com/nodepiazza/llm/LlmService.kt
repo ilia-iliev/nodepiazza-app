@@ -1,4 +1,4 @@
-package com.nodepiazza
+package com.nodepiazza.llm
 
 /**
  * Match peer-advertised interest texts against ours. The stub matches on normalized equality so

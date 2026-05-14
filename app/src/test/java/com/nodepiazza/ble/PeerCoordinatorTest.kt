@@ -2,7 +2,7 @@ package com.nodepiazza.ble
 
 import com.nodepiazza.ChatSender
 import com.nodepiazza.protocol.InterestsPayload
-import com.nodepiazza.LlmMatch
+import com.nodepiazza.llm.LlmMatch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -277,6 +277,50 @@ class PeerCoordinatorTest {
         assertNull(c.chats.value[peerDeviceId])
     }
 
+    // ---------- Block ----------
+
+    @Test
+    fun blockPeer_returnsAddresses_andRemovesPeer() {
+        val c = newCoord()
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        c.onInterestsMatched(peerDeviceId, addrA, matched())
+
+        val toDisconnect = c.blockPeer(peerDeviceId)
+        assertEquals(setOf(addrA), toDisconnect)
+        assertNull(c.peers.value[peerDeviceId])
+        assertNull(c.chats.value[peerDeviceId])
+    }
+
+    @Test
+    fun blockPeer_survivesBleStop_unlikeReject() {
+        val c = newCoord()
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        c.blockPeer(peerDeviceId)
+        // resetOnBleStop clears the session-scoped reject state, but the block must hold.
+        c.resetOnBleStop()
+        c.onClientOpened(addrA)
+        assertEquals(
+            PeerCoordinator.InterestsDecodeDecision.DropRejected,
+            c.onInterestsDecoded(addrA, decoded(peerDeviceId)),
+        )
+    }
+
+    @Test
+    fun initiallyBlocked_devicesAreGatedFromTheStart() {
+        val c = PeerCoordinator(
+            myDeviceId = myDeviceId,
+            initiallyBlocked = setOf(peerDeviceId),
+            clock = { clock.get() },
+        )
+        c.onClientOpened(addrA)
+        assertEquals(
+            PeerCoordinator.InterestsDecodeDecision.DropRejected,
+            c.onInterestsDecoded(addrA, decoded(peerDeviceId)),
+        )
+    }
+
     // ---------- Pruning ----------
 
     @Test
@@ -394,13 +438,101 @@ class PeerCoordinatorTest {
     }
 
     @Test
-    fun interestsMatched_notMatched_returnsNotMatchedWithoutMutatingPeer() {
+    fun interestsMatched_notMatched_keepsPeerVisibleAndConnected() {
         val c = newCoord()
         c.onClientOpened(addrA)
         c.onInterestsDecoded(addrA, decoded(peerDeviceId))
         val r = c.onInterestsMatched(peerDeviceId, addrA, noMatch())
-        assertSame(PeerCoordinator.InterestsMatchDecision.NotMatched, r)
-        assertFalse(c.peers.value[peerDeviceId]!!.matched)
+        assertTrue(r is PeerCoordinator.InterestsMatchDecision.NotMatched)
+        // Nothing to evict — only one no-match peer, well under the cap.
+        assertTrue((r as PeerCoordinator.InterestsMatchDecision.NotMatched).evictedAddresses.isEmpty())
+        // Peer stays visible (unmatched) and keeps its address so the user can still open a chat.
+        val peer = c.peers.value[peerDeviceId]
+        assertNotNull(peer)
+        assertFalse(peer!!.matched)
+        assertEquals(setOf(addrA), peer.addresses)
+    }
+
+    @Test
+    fun noMatchCap_evictsLeastRecentlySeenBeyondCap() {
+        val c = newCoord()
+        // Register four no-match peers, each seen progressively later.
+        val peers = (1..4).map { i ->
+            val id = "00000000-0000-0000-0000-0000000000c$i"
+            val addr = "CC:CC:CC:CC:CC:0$i"
+            clock.addAndGet(1_000L)
+            c.onClientOpened(addr)
+            c.onInterestsDecoded(addr, decoded(id))
+            val r = c.onInterestsMatched(id, addr, noMatch())
+            id to (addr to r)
+        }
+        // First three stay; the fourth trips the cap.
+        for (i in 0..2) {
+            val (_, decisionPair) = peers[i]
+            assertTrue((decisionPair.second as PeerCoordinator.InterestsMatchDecision.NotMatched)
+                .evictedAddresses.isEmpty())
+        }
+        val (evictedId, lastPair) = peers[0]
+        val lastDecision = peers[3].second.second as PeerCoordinator.InterestsMatchDecision.NotMatched
+        // The least-recently-seen no-match peer (the first one) is evicted.
+        assertEquals(setOf(lastPair.first), lastDecision.evictedAddresses)
+        assertNull(c.peers.value[evictedId])
+        assertEquals(3, c.peers.value.values.count { !it.matched })
+    }
+
+    @Test
+    fun noMatchCap_doesNotCountMatchedPeers() {
+        val c = newCoord()
+        // One matched peer plus three no-match peers — the matched one doesn't consume a slot.
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        c.onInterestsMatched(peerDeviceId, addrA, matched())
+        for (i in 1..3) {
+            val id = "00000000-0000-0000-0000-0000000000d$i"
+            val addr = "DD:DD:DD:DD:DD:0$i"
+            clock.addAndGet(1_000L)
+            c.onClientOpened(addr)
+            c.onInterestsDecoded(addr, decoded(id))
+            val r = c.onInterestsMatched(id, addr, noMatch())
+            assertTrue((r as PeerCoordinator.InterestsMatchDecision.NotMatched)
+                .evictedAddresses.isEmpty())
+        }
+        assertEquals(4, c.peers.value.size)
+    }
+
+    @Test
+    fun noMatchCap_doesNotEvictActiveChatPeer() {
+        val c = newCoord()
+        // Oldest no-match peer is the active chat; it must survive eviction.
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        c.onInterestsMatched(peerDeviceId, addrA, noMatch())
+        c.openChat(peerDeviceId)
+        for (i in 1..3) {
+            val id = "00000000-0000-0000-0000-0000000000e$i"
+            val addr = "EE:EE:EE:EE:EE:0$i"
+            clock.addAndGet(1_000L)
+            c.onClientOpened(addr)
+            c.onInterestsDecoded(addr, decoded(id))
+            c.onInterestsMatched(id, addr, noMatch())
+        }
+        // The active chat peer is kept; the next-oldest no-match peer is evicted instead.
+        assertNotNull(c.peers.value[peerDeviceId])
+        assertEquals(3, c.peers.value.values.count { !it.matched })
+    }
+
+    @Test
+    fun interestsMatched_suppressesNotificationWhenUserAlreadyOpenedChat() {
+        val c = newCoord()
+        // User opens the chat before the LLM verdict lands.
+        c.openChat(peerDeviceId)
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        val r = c.onInterestsMatched(peerDeviceId, addrA, matched("espresso"))
+        assertTrue(r is PeerCoordinator.InterestsMatchDecision.Matched)
+        // Label is still applied to the peer, but no notification fires.
+        assertNull((r as PeerCoordinator.InterestsMatchDecision.Matched).notifyLabel)
+        assertEquals("espresso", c.peers.value[peerDeviceId]!!.matchReason)
     }
 
     // ---------- Match notification dismissal ----------

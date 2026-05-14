@@ -17,7 +17,6 @@ data class ModelEntry(
     val name: String,
     val path: String,
     val sizeBytes: Long,
-    val sha256: String? = null,
 )
 
 /**

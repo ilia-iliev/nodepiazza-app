@@ -1,4 +1,4 @@
-package com.nodepiazza
+package com.nodepiazza.llm
 
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals

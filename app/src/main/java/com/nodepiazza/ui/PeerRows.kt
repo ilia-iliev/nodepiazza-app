@@ -30,6 +30,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.nodepiazza.Peer
 
+/** Chat title for a peer: the matched interest once the model has labelled it, else the raw peer id. */
+internal val Peer.displayTitle: String
+    get() = matchReason?.takeIf { it.isNotBlank() } ?: label
+
 @Composable
 internal fun SectionLabel(text: String) {
     Text(
@@ -88,8 +92,7 @@ internal fun MatchedPeerRow(peer: Peer, onOpen: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                val heading = peer.matchReason?.takeIf { it.isNotBlank() } ?: peer.label
-                Text(heading, fontWeight = FontWeight.Medium)
+                Text(peer.displayTitle, fontWeight = FontWeight.Medium)
                 Text(
                     "tap to chat",
                     style = MaterialTheme.typography.bodySmall,
@@ -101,16 +104,23 @@ internal fun MatchedPeerRow(peer: Peer, onOpen: () -> Unit) {
 }
 
 @Composable
-internal fun OtherPeerRow(peer: Peer) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
+internal fun OtherPeerRow(peer: Peer, onOpen: () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        onClick = onOpen,
     ) {
-        Text(
-            peer.label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(peer.label, fontWeight = FontWeight.Medium)
+                Text(
+                    "tap to chat",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }

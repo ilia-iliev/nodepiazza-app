@@ -3,7 +3,7 @@ package com.nodepiazza
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class Interest(val id: String, val text: String)
+data class Interest(val id: String, val text: String, val placeholder: Boolean = false)
 
 /**
  * One match-eligible peer, identified by a stable [deviceId] that persists across BLE address

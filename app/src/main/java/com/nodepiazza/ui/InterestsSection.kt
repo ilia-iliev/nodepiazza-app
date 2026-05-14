@@ -92,21 +92,40 @@ internal fun InterestChips(
     onUpdateText: (String, String) -> Unit,
     onAdd: (String) -> Unit,
     onRemove: (String) -> Unit,
+    onDismissPlaceholders: () -> Unit,
 ) {
+    var addEditing by remember { mutableStateOf(false) }
+    // First engagement with any chip clears the pre-loaded samples and drops the user
+    // straight into a fresh editor.
+    val activateAdd = {
+        onDismissPlaceholders()
+        addEditing = true
+    }
     PackedFlowRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalSpacing = 8.dp,
         verticalSpacing = 8.dp,
     ) {
         interests.forEachIndexed { index, interest ->
-            InterestChip(
-                interest = interest,
-                overLimit = fits.getOrNull(index) == false,
-                onCommitText = { onUpdateText(interest.id, it) },
-                onDelete = { onRemove(interest.id) },
-            )
+            if (interest.placeholder) {
+                PlaceholderChip(text = interest.text, onTap = activateAdd)
+            } else {
+                InterestChip(
+                    interest = interest,
+                    overLimit = fits.getOrNull(index) == false,
+                    onCommitText = { onUpdateText(interest.id, it) },
+                    onDelete = { onRemove(interest.id) },
+                )
+            }
         }
-        AddInterestChip(onAdd = onAdd)
+        AddInterestChip(
+            editing = addEditing,
+            onActivate = activateAdd,
+            onCommit = { committed ->
+                addEditing = false
+                if (committed.isNotBlank()) onAdd(committed)
+            },
+        )
     }
 }
 
@@ -247,24 +266,40 @@ private fun InterestChip(
 }
 
 @Composable
-private fun AddInterestChip(onAdd: (String) -> Unit) {
-    var editing by remember { mutableStateOf(false) }
+private fun PlaceholderChip(text: String, onTap: () -> Unit) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier.clickable { onTap() },
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Text(text, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
 
+@Composable
+private fun AddInterestChip(
+    editing: Boolean,
+    onActivate: () -> Unit,
+    onCommit: (String) -> Unit,
+) {
     if (editing) {
         ChipEditField(
             initial = "",
             placeholder = "Add interest",
-            onCommit = { committed ->
-                editing = false
-                if (committed.isNotBlank()) onAdd(committed)
-            },
+            onCommit = onCommit,
         )
     } else {
         Surface(
             shape = MaterialTheme.shapes.medium,
             color = MaterialTheme.colorScheme.secondaryContainer,
             contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-            modifier = Modifier.clickable { editing = true },
+            modifier = Modifier.clickable { onActivate() },
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,

@@ -6,13 +6,16 @@ import com.nodepiazza.ble.BleScanService
 import com.nodepiazza.ble.PeerCoordinator
 import com.nodepiazza.llm.CachingLlmService
 import com.nodepiazza.llm.LiteRtLlmService
+import com.nodepiazza.llm.LlmService
+import com.nodepiazza.llm.StubLlmService
 import com.nodepiazza.mlmodels.FilesystemModelRegistry
-import com.nodepiazza.mlmodels.ModelBootstrap
+import com.nodepiazza.mlmodels.ModelCatalog
 import com.nodepiazza.mlmodels.ModelDownloadState
 import com.nodepiazza.mlmodels.ModelDownloadStatus
 import com.nodepiazza.mlmodels.ModelEntry
 import com.nodepiazza.mlmodels.ModelPreferences
 import com.nodepiazza.mlmodels.ModelRegistry
+import com.nodepiazza.mlmodels.ModelSpec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -21,10 +24,10 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import java.io.File
 
 object Services {
@@ -40,7 +43,9 @@ object Services {
         private set
     lateinit var modelsFolder: File
         private set
-    lateinit var downloadState: StateFlow<ModelDownloadState>
+
+    /** Download state per [ModelSpec.id], so the UI can show each model's progress independently. */
+    lateinit var downloadStates: StateFlow<Map<String, ModelDownloadState>>
         private set
 
     private val _models = MutableStateFlow<List<ModelEntry>>(emptyList())
@@ -63,24 +68,29 @@ object Services {
         )
         coordinator = PeerCoordinator(
             myDeviceId = state.myDeviceId,
+            initiallyBlocked = state.blockedDeviceIds.value,
             onMatchDismissed = { deviceId -> BleScanService.cancelMatch(app, deviceId) },
         )
         ble = BleCore(app, state, coordinator)
         modelPrefs = ModelPreferences(app)
-        modelsFolder = runBlocking { modelPrefs.folderPath.first() }
-            ?.let(::File)
-            ?: app.getExternalFilesDir("models")
+        modelsFolder = app.getExternalFilesDir("models")
             ?: app.filesDir.resolve("models")
         modelRegistry = FilesystemModelRegistry(modelsFolder)
-        downloadState = ModelDownloadStatus.observe(app)
-            .stateIn(scope, SharingStarted.Eagerly, ModelDownloadState.Idle)
+        val perModel = ModelCatalog.ALL.map { spec ->
+            ModelDownloadStatus.observe(app, spec).map { spec.id to it }
+        }
+        downloadStates = combine(perModel) { pairs -> pairs.toMap() }
+            .stateIn(
+                scope,
+                SharingStarted.Eagerly,
+                ModelCatalog.ALL.associate { it.id to ModelDownloadState.Idle },
+            )
 
-        scope.launch { ModelBootstrap.ensureDefault(app, modelRegistry, modelsFolder) }
         scope.launch { refreshModels() }
         scope.launch {
-            // Re-scan whenever the download finishes so a newly-arrived file shows up.
-            downloadState.collect { state ->
-                if (state is ModelDownloadState.Succeeded) refreshModels()
+            // Re-scan whenever any download finishes so a newly-arrived file shows up.
+            downloadStates.collect { states ->
+                if (states.values.any { it is ModelDownloadState.Succeeded }) refreshModels()
             }
         }
         scope.launch {
@@ -99,7 +109,7 @@ object Services {
         }
         scope.launch {
             state.interests.collect { list ->
-                llm.setMyInterests(list.map { it.text })
+                llm.setMyInterests(list.filterNot { it.placeholder }.map { it.text })
             }
         }
         scope.launch {
@@ -107,7 +117,16 @@ object Services {
         }
     }
 
-    suspend fun refreshModels() {
+    /** Removes a model file (and any partial download) from disk, then re-scans. */
+    suspend fun deleteModel(spec: ModelSpec) {
+        withContext(Dispatchers.IO) {
+            File(modelsFolder, spec.filename).delete()
+            File(modelsFolder, spec.filename + ".part").delete()
+        }
+        refreshModels()
+    }
+
+    private suspend fun refreshModels() {
         _models.value = modelRegistry.listModels()
     }
 }
