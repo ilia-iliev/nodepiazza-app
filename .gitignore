@@ -8,6 +8,11 @@ captures/
 .externalNativeBuild/
 .cxx/
 
+# Signing — never commit the keystore or its passwords
+keystore.properties
+*.jks
+*.keystore
+
 # IDE
 .idea/
 

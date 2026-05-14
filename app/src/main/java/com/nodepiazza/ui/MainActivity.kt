@@ -75,6 +75,12 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun RootScreen(state: AppState, coordinator: PeerCoordinator, ble: BleCore) {
     val ctx = LocalContext.current
+    val policyAccepted by state.policyAccepted.collectAsStateWithLifecycle()
+    if (!policyAccepted) {
+        PolicyGate(onAccept = { state.acceptPolicy() })
+        return
+    }
+
     var granted by remember { mutableStateOf(hasAllPermissions(ctx)) }
     val bleEnabled by state.bleEnabled.collectAsStateWithLifecycle()
 

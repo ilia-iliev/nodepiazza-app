@@ -46,6 +46,9 @@ class AppState private constructor(context: Context) {
     )
     val blockedDeviceIds: StateFlow<Set<String>> = _blockedDeviceIds.asStateFlow()
 
+    private val _policyAccepted = MutableStateFlow(prefs.getBoolean(KEY_POLICY_ACCEPTED, false))
+    val policyAccepted: StateFlow<Boolean> = _policyAccepted.asStateFlow()
+
     fun addInterest(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
@@ -89,6 +92,13 @@ class AppState private constructor(context: Context) {
         persistAbout()
     }
 
+    /** Record that the user accepted the privacy and acceptable-use policies on first launch. */
+    fun acceptPolicy() {
+        if (_policyAccepted.value) return
+        _policyAccepted.value = true
+        prefs.edit().putBoolean(KEY_POLICY_ACCEPTED, true).apply()
+    }
+
     /** Permanently block a peer by stable device id. Survives restarts and BLE on/off cycles. */
     fun blockDevice(deviceId: String) {
         if (deviceId in _blockedDeviceIds.value) return
@@ -126,6 +136,7 @@ class AppState private constructor(context: Context) {
         private const val KEY_BLE_ENABLED = "ble_enabled"
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_BLOCKED = "blocked_device_ids"
+        private const val KEY_POLICY_ACCEPTED = "policy_accepted"
         private val SEED_INTERESTS = listOf("Music", "Cinema")
 
         @Volatile private var instance: AppState? = null

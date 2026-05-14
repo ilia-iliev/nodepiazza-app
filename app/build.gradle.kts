@@ -1,10 +1,18 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.jetbrains.kotlin.android)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.kotlin.serialization)
+}
+
+// Release signing is driven by a gitignored keystore.properties at the repo root. When it's
+// absent (e.g. CI, fresh clone) release builds simply go unsigned instead of failing the build.
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
 }
 
 android {
@@ -19,6 +27,18 @@ android {
         versionName = "0.1"
     }
 
+    signingConfigs {
+        create("release") {
+            val storePath = keystoreProperties.getProperty("storeFile")
+            if (storePath != null) {
+                storeFile = file(storePath)
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -26,6 +46,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            if (keystoreProperties.isNotEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

@@ -211,7 +211,7 @@ fun ChatScreen(coordinator: PeerCoordinator, ble: BleCore, deviceId: String) {
 }
 
 /** Where abuse reports are sent. Triaged manually — there is no server in this app. */
-private const val REPORT_EMAIL = "ilia.iliev94@gmail.com"
+private const val REPORT_EMAIL = "ilia.agentov@gmail.com"
 
 /**
  * Compose an abuse report email pre-filled with the peer's device id and the recent transcript,
