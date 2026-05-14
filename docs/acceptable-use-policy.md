@@ -54,6 +54,3 @@ referral to law enforcement where the law requires it (for example, CSAE).
 If this policy changes, the "Last updated" date above will change and the
 revised policy will be published at this URL.
 
-## Contact
-
-ilia.iliev94@gmail.com
