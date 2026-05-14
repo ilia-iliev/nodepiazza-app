@@ -249,11 +249,11 @@ private sealed class ConnectionStatus {
     data class OutOfRange(val idleMs: Long) : ConnectionStatus()
     data object Gone : ConnectionStatus()
 
+    /** Placeholder shown when sending is disabled — only the non-sendable states reach this. */
     fun inputHint(): String = when (this) {
-        Connected -> "Message"
-        is WaitingForPeer -> "Message"
         is OutOfRange -> "Peer is out of range"
         Gone -> "Peer is no longer reachable"
+        else -> "Message"
     }
 }
 

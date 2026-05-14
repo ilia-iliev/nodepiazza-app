@@ -16,7 +16,6 @@ interface ModelRegistry {
 data class ModelEntry(
     val name: String,
     val path: String,
-    val sizeBytes: Long,
 )
 
 /**
@@ -31,7 +30,7 @@ class FilesystemModelRegistry(
     override suspend fun listModels(): List<ModelEntry> = withContext(Dispatchers.IO) {
         val dir = rootDir.takeIf { it.isDirectory } ?: return@withContext emptyList()
         dir.listFiles { f -> f.isFile && f.extension.lowercase() in extensions }
-            ?.map { ModelEntry(name = it.name, path = it.absolutePath, sizeBytes = it.length()) }
+            ?.map { ModelEntry(name = it.name, path = it.absolutePath) }
             ?.sortedBy { it.name }
             .orEmpty()
     }

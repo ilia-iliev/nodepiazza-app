@@ -29,15 +29,12 @@ class StubLlmService : LlmService {
     @Volatile
     private var myInterests: List<String> = emptyList()
 
-    @Volatile
-    private var myAbout: String = ""
-
     override suspend fun setMyInterests(interests: List<String>) {
         myInterests = interests
     }
 
     override suspend fun setMyAbout(about: String) {
-        myAbout = about
+        // The stub matches on interest equality only; about-me text is ignored.
     }
 
     override suspend fun match(peerInterests: List<String>): LlmMatch {

@@ -28,15 +28,13 @@ object ModelCatalog {
     val E4B = ModelSpec(
         id = "e4b",
         displayName = "Gemma 4 E4B",
-        description = "More capable but needs more storage and is slower.",
+        description = "More capable but larger and slower.",
         url = "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm",
         filename = "gemma-4-E4B-it.litertlm",
         approxBytes = 3_660_000_000L,
     )
 
     val ALL: List<ModelSpec> = listOf(E2B, E4B)
-
-    fun byId(id: String?): ModelSpec? = ALL.firstOrNull { it.id == id }
 
     fun byFilename(filename: String?): ModelSpec? = ALL.firstOrNull { it.filename == filename }
 }
