@@ -96,7 +96,3 @@ knowingly collect data from children.
 
 If this policy changes, the "Last updated" date above will change and the
 revised policy will be published at this URL.
-
-## Contact
-
-Questions about this policy or about your data: ilia.iliev94@gmail.com
