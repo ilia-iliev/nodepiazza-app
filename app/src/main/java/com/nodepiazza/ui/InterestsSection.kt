@@ -20,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -98,17 +99,36 @@ internal fun InterestChips(
     onDismissPlaceholders: () -> Unit,
 ) {
     var addEditing by remember { mutableStateOf(false) }
+    var addDraft by remember { mutableStateOf(TextFieldValue("")) }
+    // Bumped to remount the edit field (re-focus, reset internal commit guard) when
+    // the user taps "+ add" mid-edit to chain a new entry.
+    var addSession by remember { mutableStateOf(0) }
     // First engagement with any chip clears the pre-loaded samples and drops the user
     // straight into a fresh editor.
     val activateAdd = {
         onDismissPlaceholders()
+        addDraft = TextFieldValue("")
+        addSession += 1
         addEditing = true
+    }
+    val commitDraft = {
+        val text = addDraft.text.trim()
+        addDraft = TextFieldValue("")
+        if (text.isNotBlank()) onAdd(text)
+    }
+    val onAddPillClick = {
+        if (addEditing) {
+            commitDraft()
+            addSession += 1
+        } else {
+            activateAdd()
+        }
     }
     PackedFlowRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalSpacing = 8.dp,
         verticalSpacing = 8.dp,
-        pinLastCount = 1,
+        pinLastCount = if (addEditing) 2 else 1,
     ) {
         interests.forEachIndexed { index, interest ->
             if (interest.placeholder) {
@@ -122,14 +142,20 @@ internal fun InterestChips(
                 )
             }
         }
-        AddInterestChip(
-            editing = addEditing,
-            onActivate = activateAdd,
-            onCommit = { committed ->
-                addEditing = false
-                if (committed.isNotBlank()) onAdd(committed)
-            },
-        )
+        if (addEditing) {
+            key(addSession) {
+                ChipEditField(
+                    value = addDraft,
+                    onValueChange = { addDraft = it },
+                    placeholder = "Add interest",
+                    onCommit = {
+                        commitDraft()
+                        addEditing = false
+                    },
+                )
+            }
+        }
+        AddInterestPill(onClick = onAddPillClick)
     }
 }
 
@@ -213,7 +239,7 @@ private fun InterestChip(
     onDelete: () -> Unit,
 ) {
     var editing by remember(interest.id) { mutableStateOf(false) }
-    var initialCursor by remember(interest.id) { mutableStateOf(interest.text.length) }
+    var draft by remember(interest.id) { mutableStateOf(TextFieldValue(interest.text)) }
     var menuOpen by remember(interest.id) { mutableStateOf(false) }
 
     var chipCoords by remember(interest.id) { mutableStateOf<LayoutCoordinates?>(null) }
@@ -223,11 +249,12 @@ private fun InterestChip(
     Box {
         if (editing) {
             ChipEditField(
-                initial = interest.text,
-                initialCursor = initialCursor,
+                value = draft,
+                onValueChange = { draft = it },
                 placeholder = null,
-                onCommit = { committed ->
+                onCommit = {
                     editing = false
+                    val committed = draft.text.trim()
                     if (committed != interest.text) onCommitText(committed)
                 },
             )
@@ -245,12 +272,16 @@ private fun InterestChip(
                     .pointerInput(interest.id) {
                         detectTapGestures(
                             onTap = { tap ->
-                                initialCursor = cursorOffsetFromTap(
+                                val cursor = cursorOffsetFromTap(
                                     tap = tap,
                                     chip = chipCoords,
                                     text = textCoords,
                                     layout = textLayout,
                                     fallback = interest.text.length,
+                                )
+                                draft = TextFieldValue(
+                                    text = interest.text,
+                                    selection = TextRange(cursor.coerceIn(0, interest.text.length)),
                                 )
                                 editing = true
                             },
@@ -304,60 +335,40 @@ private fun PlaceholderChip(text: String, onTap: () -> Unit) {
 }
 
 @Composable
-private fun AddInterestChip(
-    editing: Boolean,
-    onActivate: () -> Unit,
-    onCommit: (String) -> Unit,
-) {
-    if (editing) {
-        ChipEditField(
-            initial = "",
-            placeholder = "Add interest",
-            onCommit = onCommit,
-        )
-    } else {
-        Surface(
-            shape = MaterialTheme.shapes.medium,
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-            modifier = Modifier.clickable { onActivate() },
+private fun AddInterestPill(onClick: () -> Unit) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier.clickable { onClick() },
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            ) {
-                Text(
-                    "+ add",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = LocalContentColor.current.copy(alpha = 0.6f),
-                )
-            }
+            Text(
+                "+ add",
+                style = MaterialTheme.typography.bodyMedium,
+                color = LocalContentColor.current.copy(alpha = 0.6f),
+            )
         }
     }
 }
 
 @Composable
 private fun ChipEditField(
-    initial: String,
-    initialCursor: Int = initial.length,
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
     placeholder: String?,
-    onCommit: (String) -> Unit,
+    onCommit: () -> Unit,
 ) {
-    var draft by remember {
-        mutableStateOf(
-            TextFieldValue(
-                text = initial,
-                selection = TextRange(initialCursor.coerceIn(0, initial.length)),
-            ),
-        )
-    }
     var hadFocus by remember { mutableStateOf(false) }
     var committed by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val commit = {
         if (!committed) {
             committed = true
-            onCommit(draft.text.trim())
+            onCommit()
         }
     }
 
@@ -367,8 +378,8 @@ private fun ChipEditField(
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
     ) {
         BasicTextField(
-            value = draft,
-            onValueChange = { draft = it },
+            value = value,
+            onValueChange = onValueChange,
             modifier = Modifier
                 .padding(horizontal = 12.dp, vertical = 8.dp)
                 .focusRequester(focusRequester)
@@ -387,7 +398,7 @@ private fun ChipEditField(
             keyboardActions = KeyboardActions(onDone = { commit() }),
             decorationBox = { inner ->
                 Box {
-                    if (draft.text.isEmpty() && placeholder != null) {
+                    if (value.text.isEmpty() && placeholder != null) {
                         Text(
                             placeholder,
                             style = MaterialTheme.typography.bodyMedium,
