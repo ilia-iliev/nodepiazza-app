@@ -51,7 +51,7 @@ internal fun InterestsHeader(percent: Int, overflow: Boolean) {
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        SectionLabel("Talk to me about")
+        SectionLabel("Shared")
         Spacer(Modifier.weight(1f))
         // Only surfaced once the budget is nearly full; ramps to error red between
         // 80% and 100%, stays red beyond.
@@ -108,6 +108,7 @@ internal fun InterestChips(
         modifier = Modifier.fillMaxWidth(),
         horizontalSpacing = 8.dp,
         verticalSpacing = 8.dp,
+        pinLastCount = 1,
     ) {
         interests.forEachIndexed { index, interest ->
             if (interest.placeholder) {
@@ -135,11 +136,15 @@ internal fun InterestChips(
 // First-fit packing with look-ahead: each line starts with the next remaining
 // chip, then any subsequent chip that still fits is pulled up onto that line.
 // Order within a line is preserved; chips can only move earlier, never later.
+// The trailing `pinLastCount` items skip packing and are appended at the end —
+// onto the last line if they fit, else wrapped — so an action chip like "+ add"
+// never gets pulled forward past a content chip that didn't fit.
 @Composable
 private fun PackedFlowRow(
     modifier: Modifier = Modifier,
     horizontalSpacing: Dp = 0.dp,
     verticalSpacing: Dp = 0.dp,
+    pinLastCount: Int = 0,
     content: @Composable () -> Unit,
 ) {
     Layout(content = content, modifier = modifier) { measurables, constraints ->
@@ -150,7 +155,9 @@ private fun PackedFlowRow(
 
         class Line(val items: MutableList<Placeable> = mutableListOf(), var width: Int = 0, var height: Int = 0)
 
-        val remaining = placeables.toMutableList()
+        val pinCount = pinLastCount.coerceIn(0, placeables.size)
+        val remaining = placeables.dropLast(pinCount).toMutableList()
+        val pinned = placeables.takeLast(pinCount)
         val lines = mutableListOf<Line>()
         while (remaining.isNotEmpty()) {
             val first = remaining.removeAt(0)
@@ -167,6 +174,17 @@ private fun PackedFlowRow(
                 }
             }
             lines.add(line)
+        }
+        for (p in pinned) {
+            val last = lines.lastOrNull()
+            val needed = if (last == null) p.width else last.width + hPx + p.width
+            if (last != null && needed <= maxWidth) {
+                last.items.add(p)
+                last.width = needed
+                if (p.height > last.height) last.height = p.height
+            } else {
+                lines.add(Line(mutableListOf(p), p.width, p.height))
+            }
         }
 
         val gaps = (lines.size - 1).coerceAtLeast(0) * vPx

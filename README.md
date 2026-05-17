@@ -11,59 +11,18 @@ Core beliefs:
 
 # nodepiazza-app
 
-An Android app that finds nearby people looking sharing an interest — over Bluetooth, no servers, no internet.
-
-You have your profile of what interests you. Other devices running the app within BLE range do the same. When two devices' share an interest, they unlock a direct peer-to-peer chat.
+An Android app that quietly finds nearby people who share an interest with you — over Bluetooth. No servers, no accounts, no internet.
 
 ## How it works
 
-Each phone runs both halves of BLE at once:
+1. You write down what you're into — music, hiking, a specific board game, whatever.
+2. You can also jot down a private "about me" note. It stays on your phone.
+3. When another phone running the app comes within Bluetooth range (a room, a café, the same train carriage), the two phones swap interest lists in the background.
+4. If the app thinks you share something, the other person shows up in your "Nearby" list, and you in theirs.
+5. Tap them to open a chat. The messages travel directly phone-to-phone — nothing leaves the room.
 
-- **GATT server + advertiser** — exposes a service with a readable interests and a writable chat characteristic.
-- **Scanner + GATT client** — discovers peers advertising the same UUID and writes chat messages to them.
+Matching runs on-device using a small language model (Gemma), so it understands that "hiking" and "senderismo" are the same thing, and that "Skoda" and "Toyota" both count as cars. The model is downloaded once on first launch.
 
-Interests and compared against peers'; matched peers become tappable and open a chat.
+Your "about me" is never broadcast. Only the interest list is shared with nearby phones, and only while scanning is on.
 
-## Project layout
 
-```
-app/src/main/java/com/nodepiazza/
-├── AppState.kt           # Persistent user state (interests, BLE toggle, about-me)
-├── Domain.kt             # Interest / Peer / ChatMessage / ChatSender
-├── LlmService.kt         # LLM match interface + stub
-├── Services.kt           # Service locator (llm, ble, model registry)
-├── protocol/
-│   ├── Protocol.kt           # UUIDs + wire limits
-│   ├── ChatFraming.kt        # Multi-fragment chat framing
-│   └── InterestsPayload.kt   # Interests characteristic codec
-├── ble/
-│   ├── BleCore.kt            # Owns radio interactions; delegates to coordinator
-│   ├── BleScanner.kt         # Scan lifecycle wrapper
-│   ├── BleAdvertiser.kt      # Advertise lifecycle wrapper
-│   ├── PeerCoordinator.kt    # Pure decision layer (no Android deps)
-│   ├── ChatReassembler.kt    # Inbound fragment reassembly
-│   └── BleScanService.kt     # Foreground service + match notifications
-├── mlmodels/
-│   ├── ModelRegistry.kt      # On-device model file discovery
-│   ├── ModelPreferences.kt   # DataStore-backed selection + folder
-│   ├── ModelBootstrap.kt     # First-launch default-model download
-│   └── ModelDownloadWorker.kt
-└── ui/
-    ├── MainActivity.kt       # Activity + permission-gated RootScreen
-    ├── Permissions.kt        # Runtime permission helpers + gate UI
-    ├── MainScreen.kt         # Top-level scaffold + lists
-    ├── InterestsSection.kt   # Interest chips, packing, edit UI
-    ├── AboutMeSection.kt     # Private about-me field
-    ├── PeerRows.kt           # Matched/other peer rows + scan status
-    ├── ChatScreen.kt         # Per-peer chat
-    ├── ModelPicker.kt        # Model-selection bottom sheet
-    └── Theme.kt
-```
-
-## Build
-
-```
-./gradlew :app:installDebug
-```
-
-Needs two real devices with BLE peripheral support (most emulators won't work).

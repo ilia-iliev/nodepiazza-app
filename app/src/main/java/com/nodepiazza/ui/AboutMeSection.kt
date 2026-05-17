@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.dp
 internal fun AboutMeSection(value: String, onChange: (String) -> Unit) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            SectionLabel("Private to you")
+            SectionLabel("Private")
             Spacer(Modifier.weight(1f))
             Icon(
                 imageVector = Icons.Default.Lock,

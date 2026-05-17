@@ -23,8 +23,12 @@ android {
         applicationId = "com.nodepiazza"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 3
+        versionName = "0.1.2"
+
+        ndk {
+            debugSymbolLevel = "FULL"
+        }
     }
 
     signingConfigs {

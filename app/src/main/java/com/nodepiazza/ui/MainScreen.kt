@@ -116,7 +116,7 @@ fun MainScreen(state: AppState, coordinator: PeerCoordinator, ble: BleCore) {
                 item { AboutMeSection(value = aboutMe, onChange = state::setAboutMe) }
 
                 item { Spacer(Modifier.height(20.dp)) }
-                item { SectionLabel("Nearby peers") }
+                item { SectionLabel("Nearby") }
                 if (peers.isEmpty()) {
                     item { ScanStatusHint(scanning = bleEnabled) }
                 }
