@@ -122,6 +122,12 @@ class BleCore(
         for (addr in addrs) clients[addr]?.let { runCatching { it.disconnect() } }
     }
 
+    /** Wipe a peer locally without blocking; the next encounter re-matches from scratch. */
+    fun removeChat(deviceId: String) {
+        val addrs = coordinator.removeChat(deviceId)
+        for (addr in addrs) clients[addr]?.let { runCatching { it.disconnect() } }
+    }
+
     /**
      * Open the chat with [deviceId] in the coordinator and signal the peer we've opened it by
      * writing the presence sentinel to every known address. The peer flips its chat status from

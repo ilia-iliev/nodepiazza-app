@@ -321,7 +321,34 @@ class PeerCoordinatorTest {
         )
     }
 
-    // ---------- Pruning ----------
+    // ---------- Remove chat (testing helper) ----------
+
+    @Test
+    fun removeChat_wipesPeerAndChat_andAllowsFreshMatchOnReconnect() {
+        val dismissed = mutableListOf<String>()
+        val c = newCoord(onMatchDismissed = { dismissed.add(it) })
+        c.onClientOpened(addrA)
+        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        c.onInterestsMatched(peerDeviceId, addrA, matched())
+        assertNotNull(c.peers.value[peerDeviceId])
+
+        val toDisconnect = c.removeChat(peerDeviceId)
+        assertEquals(setOf(addrA), toDisconnect)
+        assertNull(c.peers.value[peerDeviceId])
+        assertNull(c.chats.value[peerDeviceId])
+        assertTrue(dismissed.contains(peerDeviceId))
+
+        // Unlike rejectPeer, the next encounter is NOT dropped — it goes through the
+        // normal Registered path and the LLM match runs again.
+        c.onClientOpened(addrA)
+        val decision = c.onInterestsDecoded(addrA, decoded(peerDeviceId))
+        assertTrue(decision is PeerCoordinator.InterestsDecodeDecision.Registered)
+
+        // And a fresh match fires a notification again (seenMatches was cleared).
+        val matchDecision = c.onInterestsMatched(peerDeviceId, addrA, matched("guitars"))
+            as PeerCoordinator.InterestsMatchDecision.Matched
+        assertNotNull(matchDecision.notifyLabel)
+    }
 
     @Test
     fun prune_dropsPeerIdleBeyondNoMessagesWindow() {

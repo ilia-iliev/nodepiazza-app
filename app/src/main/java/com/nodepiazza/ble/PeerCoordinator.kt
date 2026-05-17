@@ -328,6 +328,26 @@ class PeerCoordinator(
         return rejectPeer(deviceId)
     }
 
+    /**
+     * Wipe all local state for [deviceId] without adding it to any exclusion set. The next scan
+     * hit will reconnect, re-read interests, and re-run the LLM match — producing a fresh chat
+     * and a fresh match notification. Intended as a testing helper for the match flow.
+     */
+    fun removeChat(deviceId: String): Set<String> {
+        val peer = _peers.value[deviceId]
+        val addrs = peer?.addresses.orEmpty()
+        for (addr in addrs) {
+            forceMatchedAddresses.remove(addr)
+            pendingTexts.remove(addr)
+            pendingInboundChats.remove(addr)
+            pendingPresenceAddresses.remove(addr)
+            deviceIdByAddress.remove(addr)
+        }
+        lastSeenByDeviceId.remove(deviceId)
+        removePeerEntry(deviceId)
+        return addrs
+    }
+
     /** Reject a peer; returns the set of addresses BleCore should disconnect. */
     fun rejectPeer(deviceId: String): Set<String> {
         rejectedDevices.add(deviceId)

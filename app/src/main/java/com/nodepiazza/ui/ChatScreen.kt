@@ -115,6 +115,14 @@ fun ChatScreen(coordinator: PeerCoordinator, ble: BleCore, deviceId: String) {
                                 showBlockDialog = true
                             },
                         )
+                        DropdownMenuItem(
+                            text = { Text("Remove chat (testing)") },
+                            onClick = {
+                                menuOpen = false
+                                ble.removeChat(deviceId)
+                                coordinator.closeChat()
+                            },
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
