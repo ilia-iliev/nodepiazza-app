@@ -19,19 +19,19 @@ class MatchPromptTest {
         assertTrue(prompt.contains("- tennis partner"))
         assertTrue(prompt.contains("- espresso"))
         assertTrue(prompt.contains("- road bike"))
-        assertTrue(prompt.contains("Evaluate and provide in json"))
+        assertTrue(prompt.contains("Return JSON:"))
     }
 
     @Test
     fun build_omitsCommentsBlockWhenEmpty() {
         val prompt = MatchPrompt.build(listOf("a"), "", listOf("b"))
-        assertFalse(prompt.contains("Here are A's comments"))
+        assertFalse(prompt.contains("A's private notes"))
     }
 
     @Test
     fun build_includesCommentsBlockWhenSet() {
         val prompt = MatchPrompt.build(listOf("a"), "I prefer evenings", listOf("b"))
-        assertTrue(prompt.contains("Here are A's comments:"))
+        assertTrue(prompt.contains("A's private notes:"))
         assertTrue(prompt.contains("I prefer evenings"))
     }
 
