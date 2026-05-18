@@ -48,17 +48,6 @@ class MatchPromptTest {
         assertFalse(prompt.contains("- \n"))
     }
 
-    @Test
-    fun build_omitsLanguageInstructionWhenNullOrBlank() {
-        assertFalse(MatchPrompt.build(listOf("a"), "", listOf("b")).contains("Write the full_reasoning"))
-        assertFalse(MatchPrompt.build(listOf("a"), "", listOf("b"), "  ").contains("Write the full_reasoning"))
-    }
-
-    @Test
-    fun build_includesLanguageInstructionWhenSet() {
-        val prompt = MatchPrompt.build(listOf("a"), "", listOf("b"), "Spanish")
-        assertTrue(prompt.contains("Write the full_reasoning and reason_summary values in Spanish"))
-    }
 }
 
 class MatchParserTest {

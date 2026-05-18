@@ -34,8 +34,7 @@ internal fun AboutMeSection(value: String, onChange: (String) -> Unit) {
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Spacer(Modifier.height(2.dp))
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(10.dp))
         Surface(
             shape = MaterialTheme.shapes.medium,
             color = MaterialTheme.colorScheme.surfaceVariant,

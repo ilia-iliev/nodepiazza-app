@@ -19,7 +19,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.nodepiazza.AppForeground
 import com.nodepiazza.AppState
 import com.nodepiazza.Services
 import com.nodepiazza.ble.BleCore
@@ -54,12 +53,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        AppForeground.isForeground = true
+        isForeground = true
     }
 
     override fun onStop() {
         super.onStop()
-        AppForeground.isForeground = false
+        isForeground = false
     }
 
     private fun handleOpenChatIntent(intent: Intent?) {
@@ -69,6 +68,13 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_OPEN_CHAT_DEVICE_ID = "open_chat_device_id"
+
+        /**
+         * Set from onStart/onStop. Read by background components ([BleScanService]) that need to
+         * know whether the user is currently looking at the app — e.g. to suppress match
+         * notifications for a peer already visible in the list.
+         */
+        @Volatile var isForeground: Boolean = false
     }
 }
 

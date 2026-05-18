@@ -97,13 +97,13 @@ class PeerCoordinatorTest {
     }
 
     @Test
-    fun interestsDecode_rejectedDevice_dropsAndPoisonsAddress() {
+    fun interestsDecode_blockedDevice_dropsAndPoisonsAddress() {
         val c = newCoord()
-        // First seed and reject the peer at a different address.
+        // First seed and block the peer at a different address.
         c.onClientOpened(addrA)
         c.onInterestsDecoded(addrA, decoded(peerDeviceId))
         c.onInterestsMatched(peerDeviceId, addrA, matched())
-        c.rejectPeer(peerDeviceId)
+        c.blockPeer(peerDeviceId)
         // Now the same peer comes in on a new address.
         assertEquals(
             PeerCoordinator.InterestsDecodeDecision.DropRejected,
@@ -220,14 +220,14 @@ class PeerCoordinatorTest {
     }
 
     @Test
-    fun chatFromRejectedDevice_ignored() {
+    fun chatFromBlockedDevice_ignored() {
         val c = newCoord()
         c.onClientOpened(addrA)
         c.onInterestsDecoded(addrA, decoded(peerDeviceId))
         c.onInterestsMatched(peerDeviceId, addrA, matched())
-        c.rejectPeer(peerDeviceId)
+        c.blockPeer(peerDeviceId)
         // The mapping address→deviceId survives until BleCore reports the disconnect, so an
-        // inbound chat on the same address resolves to the rejected deviceId and is ignored.
+        // inbound chat on the same address resolves to the blocked deviceId and is ignored.
         val r = c.onChatReceived(addrA, "let me back")
         assertSame(PeerCoordinator.ChatReceiveDecision.Ignore, r)
         assertTrue(c.chats.value.values.flatten().none { it.text == "let me back" })
@@ -259,10 +259,10 @@ class PeerCoordinatorTest {
         assertEquals("anyone home?", c.chats.value[peerDeviceId]!!.single().text)
     }
 
-    // ---------- Reject ----------
+    // ---------- Block ----------
 
     @Test
-    fun rejectPeer_returnsAllAddresses_andRemovesPeer() {
+    fun blockPeer_returnsAllAddresses_andRemovesPeer() {
         val c = newCoord()
         c.onClientOpened(addrA)
         c.onInterestsDecoded(addrA, decoded(peerDeviceId))
@@ -271,34 +271,19 @@ class PeerCoordinatorTest {
         c.onInterestsDecoded(addrB, decoded(peerDeviceId))
         c.onInterestsMatched(peerDeviceId, addrB, matched())
 
-        val toDisconnect = c.rejectPeer(peerDeviceId)
+        val toDisconnect = c.blockPeer(peerDeviceId)
         assertEquals(setOf(addrA, addrB), toDisconnect)
         assertNull(c.peers.value[peerDeviceId])
         assertNull(c.chats.value[peerDeviceId])
     }
 
-    // ---------- Block ----------
-
     @Test
-    fun blockPeer_returnsAddresses_andRemovesPeer() {
-        val c = newCoord()
-        c.onClientOpened(addrA)
-        c.onInterestsDecoded(addrA, decoded(peerDeviceId))
-        c.onInterestsMatched(peerDeviceId, addrA, matched())
-
-        val toDisconnect = c.blockPeer(peerDeviceId)
-        assertEquals(setOf(addrA), toDisconnect)
-        assertNull(c.peers.value[peerDeviceId])
-        assertNull(c.chats.value[peerDeviceId])
-    }
-
-    @Test
-    fun blockPeer_survivesBleStop_unlikeReject() {
+    fun blockPeer_survivesBleStop() {
         val c = newCoord()
         c.onClientOpened(addrA)
         c.onInterestsDecoded(addrA, decoded(peerDeviceId))
         c.blockPeer(peerDeviceId)
-        // resetOnBleStop clears the session-scoped reject state, but the block must hold.
+        // resetOnBleStop clears session-scoped state, but the block must hold.
         c.resetOnBleStop()
         c.onClientOpened(addrA)
         assertEquals(
@@ -338,7 +323,7 @@ class PeerCoordinatorTest {
         assertNull(c.chats.value[peerDeviceId])
         assertTrue(dismissed.contains(peerDeviceId))
 
-        // Unlike rejectPeer, the next encounter is NOT dropped — it goes through the
+        // Unlike blockPeer, the next encounter is NOT dropped — it goes through the
         // normal Registered path and the LLM match runs again.
         c.onClientOpened(addrA)
         val decision = c.onInterestsDecoded(addrA, decoded(peerDeviceId))
@@ -577,13 +562,13 @@ class PeerCoordinatorTest {
     }
 
     @Test
-    fun rejectPeer_firesMatchDismissed() {
+    fun blockPeer_firesMatchDismissed() {
         val dismissed = mutableListOf<String>()
         val c = newCoord(onMatchDismissed = { dismissed += it })
         c.onClientOpened(addrA)
         c.onInterestsDecoded(addrA, decoded(peerDeviceId))
         c.onInterestsMatched(peerDeviceId, addrA, matched())
-        c.rejectPeer(peerDeviceId)
+        c.blockPeer(peerDeviceId)
         assertEquals(listOf(peerDeviceId), dismissed)
     }
 
@@ -663,7 +648,7 @@ class PeerCoordinatorTest {
         c.onInterestsMatched(otherPeerDeviceId, addrB, matched())
 
         assertEquals(2, c.peers.value.size)
-        c.rejectPeer(peerDeviceId)
+        c.blockPeer(peerDeviceId)
         assertNull(c.peers.value[peerDeviceId])
         assertNotNull(c.peers.value[otherPeerDeviceId])
     }

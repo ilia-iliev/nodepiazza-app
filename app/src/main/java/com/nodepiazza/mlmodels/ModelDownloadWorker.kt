@@ -1,6 +1,5 @@
 package com.nodepiazza.mlmodels
 
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
@@ -10,6 +9,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.nodepiazza.NotificationChannels
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -35,7 +35,12 @@ class ModelDownloadWorker(
         if (target.exists()) return@withContext Result.failure()
         target.parentFile?.mkdirs()
         val partial = File(target.parentFile, target.name + ".part")
-        ensureChannel()
+        NotificationChannels.ensure(
+            applicationContext,
+            id = CHANNEL_ID,
+            name = "Model download",
+            importance = NotificationManager.IMPORTANCE_LOW,
+        )
         setForeground(makeForegroundInfo(0, 0))
 
         val resumeFrom = if (partial.exists()) partial.length() else 0L
@@ -100,15 +105,6 @@ class ModelDownloadWorker(
         } finally {
             connection?.disconnect()
         }
-    }
-
-    private fun ensureChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val mgr = applicationContext.getSystemService(NotificationManager::class.java)
-        if (mgr.getNotificationChannel(CHANNEL_ID) != null) return
-        mgr.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "Model download", NotificationManager.IMPORTANCE_LOW)
-        )
     }
 
     private fun makeForegroundInfo(written: Long, total: Long): ForegroundInfo {

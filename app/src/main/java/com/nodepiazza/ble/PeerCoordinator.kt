@@ -1,16 +1,10 @@
 package com.nodepiazza.ble
 
 import androidx.annotation.VisibleForTesting
-import com.nodepiazza.ChatMessage
 import com.nodepiazza.ChatSender
 import com.nodepiazza.llm.LlmMatch
-import com.nodepiazza.Peer
 import com.nodepiazza.protocol.InterestsPayload
 import java.util.concurrent.ConcurrentHashMap
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 
 /**
  * Pure decision layer for BLE peer matching and chat. Owns every piece of state that BleCore would
@@ -20,6 +14,10 @@ import kotlinx.coroutines.flow.update
  *
  * Tests construct an instance with a controllable clock and drive the decision methods directly,
  * without going anywhere near a real Bluetooth stack.
+ *
+ * Peer/chat state (the public flows) and per-device liveness timestamps live in [PeerStateStore],
+ * which this class delegates to. Everything in here is decision metadata: exclusion sets,
+ * queued-while-disconnected text, and address-keyed presence buffering.
  */
 class PeerCoordinator(
     val myDeviceId: String,
@@ -34,26 +32,22 @@ class PeerCoordinator(
     private val onMatchDismissed: (deviceId: String) -> Unit = {},
 ) {
 
-    private val _peers = MutableStateFlow<Map<String, Peer>>(emptyMap())
-    val peers: StateFlow<Map<String, Peer>> = _peers.asStateFlow()
-
-    private val _chats = MutableStateFlow<Map<String, List<ChatMessage>>>(emptyMap())
-    val chats: StateFlow<Map<String, List<ChatMessage>>> = _chats.asStateFlow()
-
-    private val _activeChatDeviceId = MutableStateFlow<String?>(null)
-    val activeChatDeviceId: StateFlow<String?> = _activeChatDeviceId.asStateFlow()
+    private val store = PeerStateStore(clock)
+    val peers = store.peers
+    val chats = store.chats
+    val activeChatDeviceId = store.activeChatDeviceId
 
     private val seenMatches: MutableSet<String> = ConcurrentHashMap.newKeySet()
-    private val rejectedDevices: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    // Addresses observed to belong to a blocked device; faster gate than re-decoding interests.
+    // Cleared on [resetOnBleStop] since BLE addresses rotate across BLE on/off cycles.
     private val rejectedAddresses: MutableSet<String> = ConcurrentHashMap.newKeySet()
-    // Permanently blocked device ids. Unlike [rejectedDevices], this is never cleared by
-    // [resetOnBleStop]; cross-restart persistence is owned by AppState, which seeds it here.
+    // Permanently blocked device ids. Never cleared by [resetOnBleStop]; cross-restart persistence
+    // is owned by AppState, which seeds it here.
     private val blockedDevices: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val forceMatchedAddresses: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val deviceIdByAddress = ConcurrentHashMap<String, String>()
     private val pendingTexts = ConcurrentHashMap<String, ArrayDeque<String>>()
     private val pendingInboundChats = ConcurrentHashMap<String, ArrayDeque<String>>()
-    private val lastSeenByDeviceId = ConcurrentHashMap<String, Long>()
     private val clientAddresses: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val peerOpenedDevices: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val userOpenedDevices: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -63,9 +57,8 @@ class PeerCoordinator(
         blockedDevices.addAll(initiallyBlocked)
     }
 
-    /** A peer the user has either rejected this session or permanently blocked. */
-    private fun isExcluded(deviceId: String): Boolean =
-        rejectedDevices.contains(deviceId) || blockedDevices.contains(deviceId)
+    /** A peer the user has permanently blocked. */
+    private fun isExcluded(deviceId: String): Boolean = blockedDevices.contains(deviceId)
 
     // ---------- UI focus ----------
 
@@ -74,12 +67,12 @@ class PeerCoordinator(
      * sentinel to so the peer can flip their UI from "waiting" to "connected".
      */
     fun openChat(deviceId: String): Set<String> {
-        _activeChatDeviceId.value = deviceId
+        store.setActiveChat(deviceId)
         // Remember the user engaged this peer in-app: a later LLM match should still label the
         // chat but must not raise a notification for a conversation they're already in.
         userOpenedDevices.add(deviceId)
         onMatchDismissed(deviceId)
-        return _peers.value[deviceId]?.addresses.orEmpty()
+        return store.peer(deviceId)?.addresses.orEmpty()
     }
 
     /**
@@ -87,10 +80,10 @@ class PeerCoordinator(
      * now — we kept it around in [onDisconnected] only because the chat was open.
      */
     fun closeChat() {
-        val id = _activeChatDeviceId.value
-        _activeChatDeviceId.value = null
-        if (id != null && _peers.value[id]?.addresses?.isEmpty() == true) {
-            lastSeenByDeviceId.remove(id)
+        val id = store.activeChat()
+        store.setActiveChat(null)
+        if (id != null && store.peer(id)?.addresses?.isEmpty() == true) {
+            store.forgetLastSeen(id)
             removePeerEntry(id)
         }
     }
@@ -106,17 +99,17 @@ class PeerCoordinator(
     fun onDisconnected(address: String) {
         clientAddresses.remove(address)
         val deviceId = deviceIdByAddress.remove(address) ?: return
-        val peer = _peers.value[deviceId] ?: return
+        val peer = store.peer(deviceId) ?: return
         val remaining = peer.addresses - address
         when {
             remaining.isNotEmpty() ->
-                _peers.update { it + (deviceId to peer.copy(addresses = remaining)) }
+                store.shrinkAddresses(deviceId, address)
             // Active chat keeps its entry around so the chat doesn't vanish; the UI shows the
             // out-of-range state from a stale lastSeenMs.
-            deviceId == _activeChatDeviceId.value ->
-                _peers.update { it + (deviceId to peer.copy(addresses = emptySet())) }
+            deviceId == store.activeChat() ->
+                store.clearAddresses(deviceId)
             else -> {
-                lastSeenByDeviceId.remove(deviceId)
+                store.forgetLastSeen(deviceId)
                 removePeerEntry(deviceId)
             }
         }
@@ -124,7 +117,7 @@ class PeerCoordinator(
 
     /** BleCore got a successful chat write acknowledgement; refresh liveness. */
     fun onWriteAcknowledged(address: String) {
-        deviceIdByAddress[address]?.let { markSeen(it) }
+        deviceIdByAddress[address]?.let { store.markSeen(it) }
     }
 
     /** Look up the device id for [address] if we've completed the interests handshake on it. */
@@ -140,7 +133,7 @@ class PeerCoordinator(
 
     fun onScanResult(address: String): ScanDecision {
         val knownDeviceId = deviceIdByAddress[address]
-        if (knownDeviceId != null) markSeen(knownDeviceId)
+        if (knownDeviceId != null) store.markSeen(knownDeviceId)
         if (clientAddresses.contains(address)) return ScanDecision.Skip
         if (rejectedAddresses.contains(address)) return ScanDecision.Skip
         if (knownDeviceId != null && isExcluded(knownDeviceId)) return ScanDecision.Skip
@@ -180,10 +173,10 @@ class PeerCoordinator(
         }
         deviceIdByAddress[address] = deviceId
         mergePeer(deviceId, address)
-        markSeen(deviceId)
+        store.markSeen(deviceId)
         drainPendingInboundChats(address, deviceId)
         if (forceMatchedAddresses.contains(address)) {
-            updatePeerEntry(deviceId) { it.copy(matched = true) }
+            store.markForceMatched(deviceId)
             val drained = drainPendingTexts(address)
             return InterestsDecodeDecision.ForceMatched(deviceId, drained)
         }
@@ -216,11 +209,11 @@ class PeerCoordinator(
         if (!match.matched) {
             return InterestsMatchDecision.NotMatched(enforceNoMatchCap(keepDeviceId = deviceId))
         }
-        updatePeerEntry(deviceId) { it.copy(matched = true, matchReason = match.peerInterest) }
+        store.markMatched(deviceId, match.peerInterest)
         val drained = drainPendingTexts(address)
         val firstTime = seenMatches.add(deviceId)
         val notify = firstTime && !userOpenedDevices.contains(deviceId)
-        val label = if (notify) (_peers.value[deviceId]?.label ?: labelFor(address)) else null
+        val label = if (notify) store.peer(deviceId)?.label else null
         return InterestsMatchDecision.Matched(
             pendingOutboundTexts = drained,
             notifyLabel = label,
@@ -234,18 +227,18 @@ class PeerCoordinator(
      * least-recently-seen no-match peers over the cap and returns their addresses to disconnect.
      */
     private fun enforceNoMatchCap(keepDeviceId: String): Set<String> {
-        val noMatch = _peers.value.values.filter { !it.matched }
+        val noMatch = store.allPeers().values.filter { !it.matched }
         if (noMatch.size <= NO_MATCH_CAP) return emptySet()
-        val active = _activeChatDeviceId.value
+        val active = store.activeChat()
         val evictable = noMatch
             .filter { it.deviceId != keepDeviceId && it.deviceId != active }
-            .sortedBy { lastSeenByDeviceId[it.deviceId] ?: 0L }
+            .sortedBy { store.lastSeen(it.deviceId) ?: 0L }
         val toEvict = evictable.take(noMatch.size - NO_MATCH_CAP)
         val addresses = mutableSetOf<String>()
         for (peer in toEvict) {
             addresses += peer.addresses
             for (addr in peer.addresses) deviceIdByAddress.remove(addr)
-            lastSeenByDeviceId.remove(peer.deviceId)
+            store.forgetLastSeen(peer.deviceId)
             removePeerEntry(peer.deviceId)
         }
         return addresses
@@ -283,8 +276,8 @@ class PeerCoordinator(
     }
 
     fun onSendChat(deviceId: String, text: String): SendChatDecision {
-        appendChat(deviceId, ChatMessage(ChatSender.Me, text))
-        val peer = _peers.value[deviceId] ?: return SendChatDecision.NoKnownAddress
+        store.appendOutboundChat(deviceId, text)
+        val peer = store.peer(deviceId) ?: return SendChatDecision.NoKnownAddress
         val connected = peer.addresses.firstOrNull { clientAddresses.contains(it) }
         if (connected != null) return SendChatDecision.Send(connected)
         val anyAddr = peer.addresses.firstOrNull() ?: return SendChatDecision.NoKnownAddress
@@ -316,16 +309,25 @@ class PeerCoordinator(
         markPeerOpened(deviceId)
     }
 
-    // ---------- Block / Reject ----------
+    // ---------- Block / Remove ----------
 
     /**
-     * Permanently block a peer. Same connection teardown as [rejectPeer], but the device id is
-     * also held in [blockedDevices], which [resetOnBleStop] never clears — so the block survives
+     * Permanently block a peer; returns the set of addresses BleCore should disconnect. The device
+     * id is added to [blockedDevices], which [resetOnBleStop] never clears — so the block survives
      * BLE on/off cycles. Cross-restart persistence is the caller's job (see AppState).
      */
     fun blockPeer(deviceId: String): Set<String> {
         blockedDevices.add(deviceId)
-        return rejectPeer(deviceId)
+        val peer = store.peer(deviceId)
+        val addrs = peer?.addresses.orEmpty()
+        for (addr in addrs) {
+            cleanupAddressState(addr)
+            rejectedAddresses.add(addr)
+        }
+        store.forgetLastSeen(deviceId)
+        seenMatches.add(deviceId)
+        removePeerEntry(deviceId)
+        return addrs
     }
 
     /**
@@ -334,34 +336,13 @@ class PeerCoordinator(
      * and a fresh match notification. Intended as a testing helper for the match flow.
      */
     fun removeChat(deviceId: String): Set<String> {
-        val peer = _peers.value[deviceId]
+        val peer = store.peer(deviceId)
         val addrs = peer?.addresses.orEmpty()
         for (addr in addrs) {
-            forceMatchedAddresses.remove(addr)
-            pendingTexts.remove(addr)
-            pendingInboundChats.remove(addr)
-            pendingPresenceAddresses.remove(addr)
+            cleanupAddressState(addr)
             deviceIdByAddress.remove(addr)
         }
-        lastSeenByDeviceId.remove(deviceId)
-        removePeerEntry(deviceId)
-        return addrs
-    }
-
-    /** Reject a peer; returns the set of addresses BleCore should disconnect. */
-    fun rejectPeer(deviceId: String): Set<String> {
-        rejectedDevices.add(deviceId)
-        val peer = _peers.value[deviceId]
-        val addrs = peer?.addresses.orEmpty()
-        for (addr in addrs) {
-            rejectedAddresses.add(addr)
-            forceMatchedAddresses.remove(addr)
-            pendingTexts.remove(addr)
-            pendingInboundChats.remove(addr)
-            pendingPresenceAddresses.remove(addr)
-        }
-        lastSeenByDeviceId.remove(deviceId)
-        seenMatches.add(deviceId)
+        store.forgetLastSeen(deviceId)
         removePeerEntry(deviceId)
         return addrs
     }
@@ -376,18 +357,23 @@ class PeerCoordinator(
     fun pruneStale(): Set<String> {
         val now = clock()
         val toDisconnect = mutableSetOf<String>()
-        val peers = _peers.value
-        val chats = _chats.value
-        val active = _activeChatDeviceId.value
+        val peers = store.allPeers()
+        val active = store.activeChat()
         for ((deviceId, peer) in peers) {
             if (deviceId == active) continue
-            val seen = lastSeenByDeviceId[deviceId] ?: now.also { lastSeenByDeviceId[deviceId] = it }
+            val seen = store.lastSeen(deviceId)
+            if (seen == null) {
+                // Defensive: missing lastSeen means we never observed this peer through the normal
+                // path. Seed it now so it gets a fair window before the next prune.
+                store.markSeen(deviceId)
+                continue
+            }
             val idle = now - seen
-            val haveMyMsgs = chats[deviceId]?.any { it.sender == ChatSender.Me } == true
+            val haveMyMsgs = store.chatHistory(deviceId).any { it.sender == ChatSender.Me }
             val limit = if (haveMyMsgs) staleWithMessagesMs else staleNoMessagesMs
             if (idle <= limit) continue
             toDisconnect += peer.addresses
-            lastSeenByDeviceId.remove(deviceId)
+            store.forgetLastSeen(deviceId)
             removePeerEntry(deviceId)
         }
         return toDisconnect
@@ -397,78 +383,43 @@ class PeerCoordinator(
 
     /** Clear connection-scoped state. Peers/chats/seenMatches survive across BLE on/off cycles. */
     fun resetOnBleStop() {
-        rejectedDevices.clear()
         rejectedAddresses.clear()
         forceMatchedAddresses.clear()
         deviceIdByAddress.clear()
         pendingTexts.clear()
         pendingInboundChats.clear()
-        lastSeenByDeviceId.clear()
+        store.clearLastSeen()
         clientAddresses.clear()
         pendingPresenceAddresses.clear()
     }
 
-    // ---------- Internal state mutations ----------
+    // ---------- Internal coordination helpers ----------
 
     private fun mergePeer(deviceId: String, address: String) {
-        markSeen(deviceId)
         if (pendingPresenceAddresses.remove(address)) {
             peerOpenedDevices.add(deviceId)
         }
         val opened = peerOpenedDevices.contains(deviceId)
-        _peers.update { current ->
-            val existing = current[deviceId]
-            val peer = existing?.copy(
-                addresses = existing.addresses + address,
-                peerOpenedChat = existing.peerOpenedChat || opened,
-            ) ?: newUnmatchedPeer(deviceId, address).copy(peerOpenedChat = opened)
-            current + (deviceId to peer.withLastSeen(deviceId))
-        }
+        store.addOrMergeUnmatched(deviceId, address, peerOpenedNow = opened)
     }
 
     private fun deliverChat(deviceId: String, address: String, text: String) {
-        markSeen(deviceId)
-        appendChat(deviceId, ChatMessage(ChatSender.Them, text))
         // Inbound chat is also definitive proof the peer engaged — covers cases where the
         // presence sentinel was dropped (link race, older build).
         peerOpenedDevices.add(deviceId)
-        val existing = _peers.value[deviceId]
-        if (existing == null) {
-            _peers.update {
-                it + (deviceId to newMatchedPeer(deviceId, address)
-                    .copy(peerOpenedChat = true)
-                    .withLastSeen(deviceId))
-            }
-        } else if (!existing.matched || !existing.peerOpenedChat) {
-            updatePeerEntry(deviceId) {
-                it.copy(matched = true, peerOpenedChat = true).withLastSeen(deviceId)
-            }
-        }
+        store.deliverInboundChat(deviceId, address, text)
     }
 
     private fun markPeerOpened(deviceId: String) {
         if (!peerOpenedDevices.add(deviceId)) return
-        updatePeerEntry(deviceId) { it.copy(peerOpenedChat = true) }
+        store.markPeerOpened(deviceId)
     }
 
-    private fun newUnmatchedPeer(deviceId: String, address: String) = Peer(
-        deviceId = deviceId,
-        addresses = setOf(address),
-        label = labelFor(address),
-        matched = false,
-    )
-
-    private fun newMatchedPeer(deviceId: String, address: String) = Peer(
-        deviceId = deviceId,
-        addresses = setOf(address),
-        label = labelFor(address),
-        matched = true,
-    )
-
-    /** Refresh [Peer.lastSeenMs] from [lastSeenByDeviceId]. */
-    private fun Peer.withLastSeen(deviceId: String): Peer {
-        val seen = lastSeenByDeviceId[deviceId] ?: lastSeenMs
-        return if (lastSeenMs == seen) this else copy(lastSeenMs = seen)
+    private fun cleanupAddressState(address: String) {
+        forceMatchedAddresses.remove(address)
+        pendingTexts.remove(address)
+        pendingInboundChats.remove(address)
+        pendingPresenceAddresses.remove(address)
     }
 
     private fun drainPendingTexts(address: String): List<String> =
@@ -488,35 +439,13 @@ class PeerCoordinator(
         }
     }
 
-    private fun appendChat(deviceId: String, message: ChatMessage) {
-        _chats.update { current ->
-            val existing = current[deviceId].orEmpty()
-            current + (deviceId to (existing + message))
-        }
-    }
-
-    private fun updatePeerEntry(deviceId: String, transform: (Peer) -> Peer) {
-        _peers.update { current ->
-            val existing = current[deviceId] ?: return@update current
-            current + (deviceId to transform(existing))
-        }
-    }
-
     private fun removePeerEntry(deviceId: String) {
-        _peers.update { it - deviceId }
-        _chats.update { it - deviceId }
-        if (_activeChatDeviceId.value == deviceId) _activeChatDeviceId.value = null
+        store.removePeer(deviceId)
         // Allow a returning peer to fire a fresh match notification next encounter.
         seenMatches.remove(deviceId)
         peerOpenedDevices.remove(deviceId)
         userOpenedDevices.remove(deviceId)
         onMatchDismissed(deviceId)
-    }
-
-    private fun markSeen(deviceId: String) {
-        lastSeenByDeviceId[deviceId] = clock()
-        // Republish so subscribers (chat header, peer list) see the refreshed timestamp.
-        updatePeerEntry(deviceId) { it.withLastSeen(deviceId) }
     }
 
     companion object {

@@ -2,7 +2,6 @@ package com.nodepiazza.ble
 
 import android.Manifest
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -15,8 +14,8 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import com.nodepiazza.AppForeground
 import com.nodepiazza.AppState
+import com.nodepiazza.NotificationChannels
 import com.nodepiazza.Services
 import com.nodepiazza.ui.MainActivity
 
@@ -26,14 +25,16 @@ class BleScanService : Service() {
         super.onCreate()
         val state = AppState.get(this)
         Services.init(this, state)
-        ensureChannel(
+        NotificationChannels.ensure(
+            this,
             id = CHANNEL_ID,
             name = "Nearby scanning",
             importance = NotificationManager.IMPORTANCE_LOW,
             description = "Keeps Bluetooth scanning active in the background",
             showBadge = false,
         )
-        ensureChannel(
+        NotificationChannels.ensure(
+            this,
             id = MATCH_CHANNEL_ID,
             name = "Matches",
             importance = NotificationManager.IMPORTANCE_HIGH,
@@ -62,22 +63,6 @@ class BleScanService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
-
-    private fun ensureChannel(
-        id: String,
-        name: String,
-        importance: Int,
-        description: String,
-        showBadge: Boolean = true,
-    ) {
-        val mgr = getSystemService(NotificationManager::class.java) ?: return
-        if (mgr.getNotificationChannel(id) != null) return
-        val channel = NotificationChannel(id, name, importance).apply {
-            this.description = description
-            setShowBadge(showBadge)
-        }
-        mgr.createNotificationChannel(channel)
-    }
 
     private fun buildNotification(): Notification {
         val openIntent = Intent(this, MainActivity::class.java).apply {
@@ -118,7 +103,7 @@ class BleScanService : Service() {
 
         fun notifyMatch(context: Context, deviceId: String, label: String, peerInterest: String?) {
             // A user with the app open already sees the peer in their list; only ping in background.
-            if (AppForeground.isForeground) return
+            if (MainActivity.isForeground) return
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED

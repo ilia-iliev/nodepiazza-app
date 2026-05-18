@@ -20,7 +20,6 @@ import com.nodepiazza.protocol.ChatFraming
 import com.nodepiazza.protocol.Protocol
 import com.nodepiazza.protocol.InterestsPayload
 import com.nodepiazza.Services
-import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -62,7 +61,7 @@ class BleCore(
 
     private val clients = ConcurrentHashMap<String, BluetoothGatt>()
     private val mtuByAddress = ConcurrentHashMap<String, Int>()
-    private val sendQueues = ConcurrentHashMap<String, ArrayDeque<PendingWrite>>()
+    private val sendQueues = ConcurrentHashMap<String, ArrayDeque<ByteArray>>()
     private val sendInflight = ConcurrentHashMap<String, Boolean>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var livenessJob: Job? = null
@@ -118,14 +117,12 @@ class BleCore(
     /** Permanently block a peer: persist the block, tear down the coordinator state, drop links. */
     fun blockPeer(deviceId: String) {
         state.blockDevice(deviceId)
-        val addrs = coordinator.blockPeer(deviceId)
-        for (addr in addrs) clients[addr]?.let { runCatching { it.disconnect() } }
+        disconnectClients(coordinator.blockPeer(deviceId))
     }
 
     /** Wipe a peer locally without blocking; the next encounter re-matches from scratch. */
     fun removeChat(deviceId: String) {
-        val addrs = coordinator.removeChat(deviceId)
-        for (addr in addrs) clients[addr]?.let { runCatching { it.disconnect() } }
+        disconnectClients(coordinator.removeChat(deviceId))
     }
 
     /**
@@ -144,13 +141,12 @@ class BleCore(
 
     private fun enqueuePresenceFrame(address: String) {
         val q = sendQueues.getOrPut(address) { ArrayDeque() }
-        val frame = PendingWrite(Protocol.CHAT_CHAR_UUID, ChatFraming.PRESENCE_FRAME)
-        synchronized(q) { q.addLast(frame) }
+        synchronized(q) { q.addLast(ChatFraming.PRESENCE_FRAME) }
     }
 
     private fun enqueueChatFrames(address: String, text: String) {
         val mtu = mtuByAddress[address] ?: 23
-        val frames = ChatFraming.encode(text, mtu).map { PendingWrite(Protocol.CHAT_CHAR_UUID, it) }
+        val frames = ChatFraming.encode(text, mtu)
         Log.d(TAG, "enqueue chat to=$address frames=${frames.size} mtu=$mtu")
         val q = sendQueues.getOrPut(address) { ArrayDeque() }
         synchronized(q) { q.addAll(frames) }
@@ -175,22 +171,22 @@ class BleCore(
         val gatt = clients[address] ?: return
         val service = gatt.getService(Protocol.SERVICE_UUID) ?: return
         val q = sendQueues[address] ?: return
-        val next: PendingWrite
+        val next: ByteArray
         synchronized(q) {
             if (sendInflight[address] == true) return
             if (q.isEmpty()) return
             next = q.removeFirst()
             sendInflight[address] = true
         }
-        val ch = service.getCharacteristic(next.charUuid)
+        val ch = service.getCharacteristic(Protocol.CHAT_CHAR_UUID)
         if (ch == null) {
             synchronized(q) { sendInflight[address] = false }
             return
         }
-        ch.value = next.data
+        ch.value = next
         ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         val ok = gatt.writeCharacteristic(ch)
-        Log.d(TAG, "pumpSend to=$address bytes=${next.data.size} ok=$ok")
+        Log.d(TAG, "pumpSend to=$address bytes=${next.size} ok=$ok")
         if (!ok) {
             synchronized(q) {
                 q.addFirst(next)
@@ -208,7 +204,15 @@ class BleCore(
      */
     private fun handleLinkFailure(address: String) {
         coordinator.onDisconnected(address)
-        runCatching { clients[address]?.disconnect() }
+        disconnectClient(address)
+    }
+
+    private fun disconnectClient(address: String) {
+        clients[address]?.let { runCatching { it.disconnect() } }
+    }
+
+    private fun disconnectClients(addresses: Iterable<String>) {
+        for (addr in addresses) disconnectClient(addr)
     }
 
     // ---------- GATT server ----------
@@ -395,9 +399,7 @@ class BleCore(
                         is PeerCoordinator.InterestsMatchDecision.NotMatched ->
                             // Peer stays connected and visible so the user can still open a chat;
                             // only over-cap no-match peers get dropped.
-                            for (addr in d.evictedAddresses) {
-                                clients[addr]?.let { runCatching { it.disconnect() } }
-                            }
+                            disconnectClients(d.evictedAddresses)
                         is PeerCoordinator.InterestsMatchDecision.Matched -> {
                             for (t in d.pendingOutboundTexts) enqueueChatFrames(address, t)
                             pumpSend(address)
@@ -415,10 +417,7 @@ class BleCore(
         while (running) {
             delay(LIVENESS_CHECK_INTERVAL_MS)
             if (!running) break
-            val toDisconnect = coordinator.pruneStale()
-            for (addr in toDisconnect) clients[addr]?.let { runCatching { it.disconnect() } }
+            disconnectClients(coordinator.pruneStale())
         }
     }
 }
-
-private data class PendingWrite(val charUuid: UUID, val data: ByteArray)

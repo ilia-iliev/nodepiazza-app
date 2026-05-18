@@ -22,12 +22,10 @@ object MatchPrompt {
         myInterests: List<String>,
         myComments: String,
         peerInterests: List<String>,
-        language: String? = null,
     ): String {
         val mine = myInterests.sanitizeBullets()
         val peer = peerInterests.sanitizeBullets()
         val comments = myComments.trim().take(MAX_COMMENTS_CHARS)
-        val outputLanguage = language?.trim()?.takeIf { it.isNotEmpty() }
 
         return buildString {
             append("You are a personal assistant. Your job is to evaluate if there is a shared interest.\n\n")
@@ -48,10 +46,6 @@ object MatchPrompt {
             append("\"reason_summary\": \"<the shared interest itself, no more than 7 words. ")
             append("Just name the topic, e.g. 'Skoda and Toyota'. ")
             append("Do not prefix with 'Shared interests in' or similar.>\"}\n")
-            if (outputLanguage != null) {
-                append("\nWrite the full_reasoning and reason_summary values in $outputLanguage. ")
-                append("The JSON field names must stay in English.\n")
-            }
         }
     }
 

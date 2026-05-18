@@ -8,7 +8,7 @@ import com.nodepiazza.llm.CachingLlmService
 import com.nodepiazza.llm.LiteRtLlmService
 import com.nodepiazza.llm.LlmService
 import com.nodepiazza.llm.StubLlmService
-import com.nodepiazza.mlmodels.FilesystemModelRegistry
+import com.nodepiazza.mlmodels.ModelBootstrap
 import com.nodepiazza.mlmodels.ModelCatalog
 import com.nodepiazza.mlmodels.ModelDownloadState
 import com.nodepiazza.mlmodels.ModelDownloadStatus
@@ -40,6 +40,7 @@ object Services {
     lateinit var modelPrefs: ModelPreferences
         private set
     private lateinit var modelRegistry: ModelRegistry
+    private lateinit var appContext: Context
     lateinit var modelsFolder: File
         private set
 
@@ -59,6 +60,7 @@ object Services {
         if (initialized) return
         initialized = true
         val app = context.applicationContext
+        appContext = app
         llm = CachingLlmService(
             inner = LiteRtLlmService(
                 modelPathProvider = { _selectedModelPath.value },
@@ -74,7 +76,7 @@ object Services {
         modelPrefs = ModelPreferences(app)
         modelsFolder = app.getExternalFilesDir("models")
             ?: app.filesDir.resolve("models")
-        modelRegistry = FilesystemModelRegistry(modelsFolder)
+        modelRegistry = ModelRegistry(modelsFolder)
         val perModel = ModelCatalog.ALL.map { spec ->
             ModelDownloadStatus.observe(app, spec).map { spec.id to it }
         }
@@ -116,8 +118,13 @@ object Services {
         }
     }
 
-    /** Removes a model file (and any partial download) from disk, then re-scans. */
+    /**
+     * Cancels any in-flight download for [spec], then removes the model file and any partial
+     * download from disk. Cancelling first stops the worker from re-creating the `.part` file we're
+     * about to delete; it's a no-op when nothing is queued.
+     */
     suspend fun deleteModel(spec: ModelSpec) {
+        ModelBootstrap.cancel(appContext, spec)
         withContext(Dispatchers.IO) {
             File(modelsFolder, spec.filename).delete()
             File(modelsFolder, spec.filename + ".part").delete()
