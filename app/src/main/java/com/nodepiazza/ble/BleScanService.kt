@@ -134,12 +134,12 @@ class BleScanService : Service() {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
             val body = if (!peerInterest.isNullOrBlank()) {
-                "Someone wants to chat about \"$peerInterest\""
+                peerInterest
             } else {
                 "Someone wants to chat"
             }
             val notification = NotificationCompat.Builder(context, MATCH_CHANNEL_ID)
-                .setContentTitle("match")
+                .setContentTitle("match found!")
                 .setContentText(body)
                 .setSmallIcon(android.R.drawable.stat_notify_chat)
                 .setContentIntent(pi)
