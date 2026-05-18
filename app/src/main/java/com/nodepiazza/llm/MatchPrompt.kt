@@ -28,24 +28,24 @@ object MatchPrompt {
         val comments = myComments.trim().take(MAX_COMMENTS_CHARS)
 
         return buildString {
-            append("You are a personal assistant. Your job is to evaluate if there is a shared interest.\n\n")
-            append("Here's the profile of the person A, who will evaluate your work:\n\n")
-            append(mine.toBullets()).append("\n\n")
+            append("You are a personal assistant. Decide whether persons A and B share something specific to talk about.\n\n")
             if (comments.isNotEmpty()) {
-                append("Here are A's comments:\n\n").append(comments).append("\n\n")
-            } else {
-                append("\n")
+                append("A's private notes:\n\n").append(comments).append("\n\n")
             }
-            append("Here are the interests of a potential match - person B:\n\n")
-            append(peer.toBullets()).append("\n\n")
-            append("The interests above may be written in different languages; treat a match across languages ")
-            append("(e.g. 'senderismo' and 'hiking') as a shared interest.\n\n")
-            append("Evaluate and provide in json with the following fields:\n")
-            append("{\"match\": bool, ")
-            append("\"full_reasoning\": \"<up to 2 sentence explanation>\", ")
-            append("\"reason_summary\": \"<the shared interest itself, no more than 7 words. ")
-            append("Just name the topic, e.g. 'Skoda and Toyota'. ")
-            append("Do not prefix with 'Shared interests in' or similar.>\"}\n")
+            append("Find any shared topic between A and B. A topic counts across languages or phrasings.\n\n")
+            append("Do NOT invent shared topics that aren't in both lists.\n\n")
+            if (comments.isNotEmpty()) {
+                append("If A's notes reject any topic AND B has X → that goes into veto_topics and ")
+                append("match must be false.\n\n")
+            }
+            append("Return JSON:\n")
+            append("{\"full_reasoning\": \"<≤2 sentences>\", ")
+            append("\"reason_summary\": \"<topic, ≤7 words>\", ")
+            append("\"match\": bool}\n\n")
+            append("A's interests:\n\n")
+            append(mine.toBullets()).append("\n\n")
+            append("B's interests:\n\n")
+            append(peer.toBullets()).append("\n")
         }
     }
 
