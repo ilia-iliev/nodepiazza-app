@@ -17,7 +17,7 @@ keystore.properties
 .idea/
 
 # Claude
-.claude/settings.local.json
+.claude/
 
 # Personal notes, drafts, assets not part of the app
 notes/
