@@ -18,6 +18,7 @@ keystore.properties
 
 # Claude
 .claude/
+CLAUDE.md
 
 # Personal notes, drafts, assets not part of the app
 notes/
